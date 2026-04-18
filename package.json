@@ -8,7 +8,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:xmpp": "node scripts/xmpp-smoke.js && node scripts/xmpp-muc.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -23,5 +25,8 @@
     "pg": "^8.11.5",
     "socket.io": "^4.7.5",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
   }
 }

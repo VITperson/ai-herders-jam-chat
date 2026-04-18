@@ -84,12 +84,14 @@ async function runBootMigrations() {
     }
 }
 
-runBootMigrations().finally(() => {
-    server.listen(config.port, () => {
-        // eslint-disable-next-line no-console
-        console.log(`[web] listening on :${config.port} (env=${config.nodeEnv})`);
+if (require.main === module) {
+    runBootMigrations().finally(() => {
+        server.listen(config.port, () => {
+            // eslint-disable-next-line no-console
+            console.log(`[web] listening on :${config.port} (env=${config.nodeEnv})`);
+        });
     });
-});
+}
 
 function shutdown(signal) {
     // eslint-disable-next-line no-console
