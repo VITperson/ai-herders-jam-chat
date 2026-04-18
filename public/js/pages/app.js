@@ -6,6 +6,46 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmtTime = (iso) => { if (!iso) return ''; const d = new Date(iso); return d.toLocaleString(); };
 
+  // Returns contact state by username: 'accepted' | 'outgoing' | 'incoming' | null.
+  function contactState(username) {
+    const me = store.state.me;
+    if (me && username === me.username) return 'self';
+    for (const c of (store.state.contacts || [])) {
+      if (c.username === username) {
+        if (c.status === 'accepted') return 'accepted';
+        return c.incoming ? 'incoming' : 'outgoing';
+      }
+    }
+    return null;
+  }
+
+  function renderFriendButton(btn, username, onSent) {
+    const state = contactState(username);
+    btn.disabled = true;
+    btn.className = 'secondary';
+    if (state === 'self') { btn.textContent = 'You'; return; }
+    if (state === 'accepted') { btn.textContent = 'Friend'; return; }
+    if (state === 'outgoing') { btn.textContent = 'Sent'; return; }
+    if (state === 'incoming') { btn.textContent = 'Respond'; return; }
+    btn.disabled = false;
+    btn.className = '';
+    btn.textContent = 'Add';
+    btn.onclick = async (e) => {
+      e && e.stopPropagation && e.stopPropagation();
+      btn.disabled = true;
+      try {
+        await api.post('/api/friends/request', { username });
+        toast('Friend request sent');
+        await reloadSidebar();
+        btn.textContent = 'Sent'; btn.className = 'secondary';
+        if (onSent) onSent();
+      } catch (ex) {
+        btn.disabled = false;
+        toast(ex.message, 'error');
+      }
+    };
+  }
+
   function toast(msg, kind) {
     const el = document.createElement('div');
     el.className = 'toast' + (kind === 'error' ? ' error' : '');
@@ -94,7 +134,7 @@
       const pres = store.state.presence[uid] || 'offline';
       const div = document.createElement('div');
       div.className = 'item';
-      div.innerHTML = `<span class="dot ${pres}" style="width:8px;height:8px;border-radius:50%;background:var(--off);display:inline-block;margin-right:6px;"></span><span class="name">${esc(uname)}</span><span class="role">${esc(status)}</span>`;
+      div.innerHTML = `<span class="dot ${pres}"></span><span class="name">${esc(uname)}</span><span class="role">${esc(status)}</span>`;
       if (status === 'pending') {
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:4px;';
@@ -357,6 +397,11 @@
       const m = arr.find(x => x.id === p.id);
       if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; if (p.room_id === store.state.activeRoomId) renderMessages(p.room_id); }
     });
+    ws.on('presence:snapshot', (states) => {
+      store.state.presence = Object.assign({}, store.state.presence || {}, states || {});
+      if (store.state.activeRoomId) renderMembers(store.state.activeRoomId);
+      renderContacts();
+    });
     ws.on('presence:update', (p) => {
       store.state.presence[p.userId] = p.state;
       if (store.state.activeRoomId) renderMembers(store.state.activeRoomId);
@@ -376,6 +421,9 @@
       renderRoomLists();
       toast('Room was deleted');
     });
+    ws.on('friend:request', () => { toast('New friend request'); reloadSidebar(); });
+    ws.on('friend:accepted', () => { reloadSidebar(); });
+    ws.on('friend:removed', () => { reloadSidebar(); });
     ws.on('session:revoked', () => { location.href = '/'; });
   }
 
@@ -449,21 +497,29 @@
         const r = await api.get(`/api/rooms?type=public${q ? '&q=' + encodeURIComponent(q) : ''}`);
         const rooms = r.rooms || r;
         listEl.innerHTML = '';
+        const mine = new Set((store.state.rooms || []).map(r => r.id));
         for (const room of rooms) {
           const row = document.createElement('div');
           row.className = 'row-item';
           row.innerHTML = `<div><b>${esc(room.name)}</b><div style="font-size:11px;color:var(--text-dim);">${esc(room.description || '')}</div></div>`;
           const act = document.createElement('div'); act.className = 'actions';
-          const join = document.createElement('button'); join.textContent = 'Join';
-          join.onclick = async () => {
-            try {
-              await api.post(`/api/rooms/${room.id}/join`);
-              await reloadSidebar();
-              closeModal();
-              openRoom(room.id);
-            } catch (e) { toast(e.message, 'error'); }
-          };
-          act.appendChild(join); row.appendChild(act); listEl.appendChild(row);
+          const btn = document.createElement('button');
+          if (mine.has(room.id)) {
+            btn.textContent = 'Joined';
+            btn.className = 'secondary';
+            btn.disabled = true;
+          } else {
+            btn.textContent = 'Join';
+            btn.onclick = async () => {
+              try {
+                await api.post(`/api/rooms/${room.id}/join`);
+                await reloadSidebar();
+                closeModal();
+                openRoom(room.id);
+              } catch (e) { toast(e.message, 'error'); }
+            };
+          }
+          act.appendChild(btn); row.appendChild(act); listEl.appendChild(row);
         }
         if (!rooms.length) listEl.innerHTML = '<div class="empty-state">No rooms</div>';
       } catch (e) { listEl.innerHTML = '<div class="error">' + esc(e.message) + '</div>'; }
@@ -656,6 +712,74 @@
     };
   }
 
+  function openContactsModal() {
+    const m = openModal(`
+      <h2>Contacts</h2>
+      <div class="row"><input id="ct-q" placeholder="Search users by username…"></div>
+      <div id="ct-search" class="list" style="max-height:180px;overflow-y:auto;"></div>
+      <h3 style="margin-top:16px;">Incoming requests</h3>
+      <div id="ct-incoming" class="list" style="max-height:160px;overflow-y:auto;"></div>
+      <h3 style="margin-top:16px;">Your contacts</h3>
+      <div id="ct-friends" class="list" style="max-height:200px;overflow-y:auto;"></div>
+      <div class="actions"><button class="secondary" id="ct-close">Close</button></div>
+    `);
+    m.querySelector('#ct-close').onclick = closeModal;
+
+    async function refreshLists() {
+      try {
+        const fr = await api.get('/api/friends');
+        const inc = m.querySelector('#ct-incoming'); inc.innerHTML = '';
+        const acc = m.querySelector('#ct-friends'); acc.innerHTML = '';
+        for (const f of (fr.incoming || [])) {
+          const row = document.createElement('div'); row.className = 'row-item';
+          row.innerHTML = `<div><b>${esc(f.username)}</b></div>`;
+          const a = document.createElement('div'); a.className = 'actions';
+          const ok = document.createElement('button'); ok.textContent = 'Accept';
+          ok.onclick = async () => { try { await api.post(`/api/friends/${f.id}/accept`); refreshLists(); reloadSidebar(); } catch (e) { toast(e.message, 'error'); } };
+          const dc = document.createElement('button'); dc.className = 'secondary'; dc.textContent = 'Decline';
+          dc.onclick = async () => { try { await api.post(`/api/friends/${f.id}/decline`); refreshLists(); reloadSidebar(); } catch (e) { toast(e.message, 'error'); } };
+          a.appendChild(ok); a.appendChild(dc); row.appendChild(a); inc.appendChild(row);
+        }
+        if (!(fr.incoming || []).length) inc.innerHTML = '<div class="empty-state">No incoming requests</div>';
+        for (const f of (fr.accepted || [])) {
+          const row = document.createElement('div'); row.className = 'row-item';
+          const pres = store.state.presence[f.id] || 'offline';
+          row.innerHTML = `<div><span class="dot ${pres}"></span><b>${esc(f.username)}</b></div>`;
+          const a = document.createElement('div'); a.className = 'actions';
+          const rm = document.createElement('button'); rm.className = 'danger'; rm.textContent = 'Remove';
+          rm.onclick = async () => { if (!confirm('Remove contact?')) return; try { await api.post(`/api/friends/${f.id}/remove`); refreshLists(); reloadSidebar(); } catch (e) { toast(e.message, 'error'); } };
+          a.appendChild(rm); row.appendChild(a); acc.appendChild(row);
+        }
+        if (!(fr.accepted || []).length) acc.innerHTML = '<div class="empty-state">No contacts yet</div>';
+      } catch (e) {
+        m.querySelector('#ct-incoming').innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    const searchBox = m.querySelector('#ct-search');
+    const runSearch = debounce(async () => {
+      const q = m.querySelector('#ct-q').value.trim();
+      if (!q) { searchBox.innerHTML = ''; return; }
+      try {
+        const r = await api.get('/api/users/search?q=' + encodeURIComponent(q));
+        const users = r.users || r || [];
+        searchBox.innerHTML = '';
+        for (const u of users) {
+          const row = document.createElement('div'); row.className = 'row-item';
+          row.innerHTML = `<div><b>${esc(u.username)}</b></div>`;
+          const a = document.createElement('div'); a.className = 'actions';
+          const add = document.createElement('button');
+          renderFriendButton(add, u.username, refreshLists);
+          a.appendChild(add); row.appendChild(a); searchBox.appendChild(row);
+        }
+        if (!users.length) searchBox.innerHTML = '<div class="empty-state">No users found</div>';
+      } catch (e) { searchBox.innerHTML = '<div class="error">' + esc(e.message) + '</div>'; }
+    }, 250);
+    m.querySelector('#ct-q').addEventListener('input', runSearch);
+
+    refreshLists();
+  }
+
   function openInviteUserModal() {
     const roomId = store.state.activeRoomId;
     if (!roomId) return;
@@ -694,14 +818,30 @@
     $('menu-delete-acc').onclick = () => { pm.classList.add('hidden'); openDeleteAccountModal(); };
     $('menu-logout').onclick = async () => { try { await api.post('/api/auth/logout'); } catch (_) {} location.href = '/'; };
 
+    // Home (logo) — clear active room, show welcome
+    $('logo-home').onclick = () => {
+      const prev = store.state.activeRoomId;
+      if (prev) ws.emit('room:unsubscribe', { roomId: prev });
+      store.setActiveRoom(null);
+      renderRoomLists();
+      $('chat-title').textContent = 'Select a room';
+      $('chat-desc').textContent = '';
+      $('btn-manage-room').style.display = 'none';
+      $('btn-leave-room').style.display = 'none';
+      $('btn-invite-user').style.display = 'none';
+      $('input-wrap').style.display = 'none';
+      $('messages').innerHTML = '<div class="empty-state">No room selected. Pick one from the sidebar or create a new one.</div>';
+      $('member-list').innerHTML = '';
+    };
+
     // top nav
     document.querySelectorAll('[data-nav]').forEach(b => {
       b.onclick = () => {
         const k = b.dataset.nav;
         if (k === 'sessions') openSessionsModal();
-        else if (k === 'rooms-public') { document.getElementById('acc-public').classList.remove('collapsed'); document.getElementById('acc-public').scrollIntoView(); }
-        else if (k === 'rooms-private') { document.getElementById('acc-private').classList.remove('collapsed'); document.getElementById('acc-private').scrollIntoView(); }
-        else if (k === 'contacts') { document.getElementById('acc-contacts').classList.remove('collapsed'); document.getElementById('acc-contacts').scrollIntoView(); }
+        else if (k === 'rooms-public') openBrowsePublicModal();
+        else if (k === 'rooms-private') openJoinTokenModal();
+        else if (k === 'contacts') openContactsModal();
       };
     });
 
@@ -724,13 +864,23 @@
       } catch (e) { toast(e.message, 'error'); }
     };
 
-    // sidebar search (user + rooms)
+    // sidebar search (user + rooms) — replaces sidebar content while searching
     const search = $('sidebar-search');
-    const searchList = $('list-search');
+    const searchList = $('search-results');
+    const sidebar = $('sidebar');
+    const clearBtn = $('search-clear');
+    function exitSearch() {
+      search.value = '';
+      searchList.innerHTML = '';
+      sidebar.classList.remove('searching');
+      clearBtn.classList.add('hidden');
+    }
     const runSearch = debounce(async () => {
       const q = search.value.trim();
-      if (!q) { searchList.innerHTML = ''; return; }
-      searchList.innerHTML = '<div class="empty-state" style="padding:8px;">Searching…</div>';
+      if (!q) { exitSearch(); return; }
+      sidebar.classList.add('searching');
+      clearBtn.classList.remove('hidden');
+      searchList.innerHTML = '<div class="empty-state" style="padding:12px;">Searching…</div>';
       try {
         const [users, rooms] = await Promise.all([
           api.get('/api/users/search?q=' + encodeURIComponent(q)).catch(() => ({ users: [] })),
@@ -740,21 +890,20 @@
         const us = users.users || users || [];
         const rs = rooms.rooms || rooms || [];
         if (us.length) {
-          const h = document.createElement('div'); h.className = 'empty-state'; h.style.cssText = 'text-align:left;padding:6px 12px;text-transform:uppercase;font-size:11px;'; h.textContent = 'Users';
+          const h = document.createElement('div'); h.className = 'group-header'; h.textContent = 'Users';
           searchList.appendChild(h);
         }
         for (const u of us) {
           const d = document.createElement('div'); d.className = 'item';
-          d.innerHTML = `<span class="name">${esc(u.username)}</span><button class="secondary" style="padding:2px 8px;font-size:11px;">Add</button>`;
-          d.querySelector('button').onclick = async (e) => {
-            e.stopPropagation();
-            try { await api.post('/api/friends/request', { username: u.username }); toast('Friend request sent'); reloadSidebar(); }
-            catch (ex) { toast(ex.message, 'error'); }
-          };
+          d.innerHTML = `<span class="name">${esc(u.username)}</span>`;
+          const btn = document.createElement('button');
+          btn.style.cssText = 'padding:2px 8px;font-size:11px;';
+          renderFriendButton(btn, u.username);
+          d.appendChild(btn);
           searchList.appendChild(d);
         }
         if (rs.length) {
-          const h = document.createElement('div'); h.className = 'empty-state'; h.style.cssText = 'text-align:left;padding:6px 12px;text-transform:uppercase;font-size:11px;'; h.textContent = 'Rooms';
+          const h = document.createElement('div'); h.className = 'group-header'; h.textContent = 'Rooms';
           searchList.appendChild(h);
         }
         for (const r of rs) {
@@ -762,17 +911,19 @@
           d.innerHTML = `<span class="name">${esc(r.name)}</span><button class="secondary" style="padding:2px 8px;font-size:11px;">Join</button>`;
           d.querySelector('button').onclick = async (e) => {
             e.stopPropagation();
-            try { await api.post(`/api/rooms/${r.id}/join`); await reloadSidebar(); openRoom(r.id); }
+            try { await api.post(`/api/rooms/${r.id}/join`); exitSearch(); await reloadSidebar(); openRoom(r.id); }
             catch (ex) { toast(ex.message, 'error'); }
           };
           searchList.appendChild(d);
         }
-        if (!us.length && !rs.length) searchList.innerHTML = '<div class="empty-state" style="padding:8px;">No matches</div>';
+        if (!us.length && !rs.length) searchList.innerHTML = '<div class="empty-state" style="padding:12px;">No matches</div>';
       } catch (e) {
         searchList.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
       }
     }, 300);
     search.addEventListener('input', runSearch);
+    search.addEventListener('keydown', (e) => { if (e.key === 'Escape') exitSearch(); });
+    clearBtn.addEventListener('click', () => { exitSearch(); search.focus(); });
 
     // Message input
     const ta = $('msg-input');

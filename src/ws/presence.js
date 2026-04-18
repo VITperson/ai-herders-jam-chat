@@ -6,7 +6,7 @@ const users = new Map();
 const lastState = new Map();
 
 const AFK_THRESHOLD_MS = 60_000;
-const TIMER_INTERVAL_MS = 15_000;
+const TIMER_INTERVAL_MS = 5_000;
 
 function now() { return Date.now(); }
 

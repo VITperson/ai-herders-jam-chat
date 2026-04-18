@@ -7,6 +7,7 @@ const requireAuth = require('../../middleware/requireAuth');
 const validate = require('../../util/validate');
 const service = require('./service');
 const adminRouter = require('../admin/routes');
+const hub = require('../../ws/hub');
 
 const router = express.Router();
 
@@ -58,7 +59,8 @@ const joinByTokenSchema = z.object({ token: z.string().min(1).max(200) });
 router.post('/join-by-token', validate(joinByTokenSchema), async (req, res, next) => {
     try {
         const result = await service.joinByToken(req.session.userId, req.body.token);
-        res.json({ ok: true, room_id: result.roomId });
+        hub.broadcastToRoom(result.roomId, 'room:member-joined', { roomId: result.roomId, userId: req.session.userId });
+        res.json({ ok: true, room_id: result.roomId, roomId: result.roomId });
     } catch (e) { next(e); }
 });
 
@@ -82,6 +84,7 @@ router.post('/:id/join', async (req, res, next) => {
     try {
         const id = parseRoomId(req.params.id);
         const r = await service.joinRoom(req.session.userId, id);
+        hub.broadcastToRoom(id, 'room:member-joined', { roomId: id, userId: req.session.userId });
         res.json(r);
     } catch (e) { next(e); }
 });
@@ -90,6 +93,7 @@ router.post('/:id/leave', async (req, res, next) => {
     try {
         const id = parseRoomId(req.params.id);
         await service.leaveRoom(req.session.userId, id);
+        hub.broadcastToRoom(id, 'room:member-left', { roomId: id, userId: req.session.userId });
         res.json({ ok: true });
     } catch (e) { next(e); }
 });
@@ -98,6 +102,8 @@ router.post('/:id/invites', async (req, res, next) => {
     try {
         const id = parseRoomId(req.params.id);
         const result = await service.createInvite(req.session.userId, id);
+        const origin = `${req.protocol}://${req.get('host')}`;
+        result.url = `${origin}/app.html?invite=${encodeURIComponent(result.token)}`;
         res.status(201).json(result);
     } catch (e) { next(e); }
 });

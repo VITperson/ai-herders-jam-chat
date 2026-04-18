@@ -41,6 +41,8 @@ function attachIO(io, sessionMiddleware) {
         console.log(`[ws] connected ${socket.id} user=${userId}`);
         addUserSocket(userId, socket.id);
         presence.addSocket(userId, socket.id);
+        // Send current presence snapshot of all known users to the new socket.
+        socket.emit('presence:snapshot', presence.getAllStates());
         // Notify initial state (afk by default until heartbeat active=true).
         presence.emitIfChanged(io, userId);
 
