@@ -68,11 +68,90 @@
     setupPresenceHeartbeat();
 
     await reloadSidebar();
+    await loadInvitations();
     attachUIHandlers();
 
     // Restore active room
     const ar = store.state.activeRoomId;
     if (ar && store.state.rooms.find(r => r.id === ar)) openRoom(ar);
+  }
+
+  // ---------- Invitations ----------
+  async function loadInvitations() {
+    try {
+      const r = await api.get('/api/rooms/invitations');
+      store.state.invitations = (r && r.invitations) || [];
+    } catch (_) {
+      store.state.invitations = [];
+    }
+    renderInvitationsBadge();
+  }
+
+  function renderInvitationsBadge() {
+    const badge = $('invitations-badge');
+    const btn = $('btn-invitations');
+    if (!badge || !btn) return;
+    const n = (store.state.invitations || []).length;
+    if (n > 0) {
+      badge.textContent = String(n);
+      badge.classList.remove('hidden');
+      btn.title = `${n} pending invitation${n === 1 ? '' : 's'}`;
+    } else {
+      badge.classList.add('hidden');
+      btn.title = 'Invitations';
+    }
+  }
+
+  function openInvitationsModal() {
+    const invitations = store.state.invitations || [];
+    const rowsHtml = invitations.length
+      ? invitations.map((inv) => `
+          <div class="row-item" data-id="${esc(inv.id)}">
+            <div>
+              <div><strong>${esc(inv.room_name)}</strong>
+                <span class="chip" style="margin-left:6px;">${esc(inv.room_type)}</span>
+              </div>
+              <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">
+                from <strong>${esc(inv.inviter_username || '—')}</strong>
+                · ${esc(new Date(inv.created_at).toLocaleString())}
+              </div>
+            </div>
+            <div class="actions">
+              <button class="primary" data-act="accept">Accept</button>
+              <button class="secondary" data-act="decline">Decline</button>
+            </div>
+          </div>`).join('')
+      : '<div class="empty-state">No pending invitations.</div>';
+
+    const m = openModal(`
+      <h2>Invitations</h2>
+      <div class="list">${rowsHtml}</div>
+      <div class="actions"><button class="secondary" id="inv-close">Close</button></div>
+    `);
+    m.querySelector('#inv-close').onclick = closeModal;
+    m.querySelectorAll('.row-item').forEach((el) => {
+      const id = el.getAttribute('data-id');
+      el.querySelector('[data-act="accept"]').onclick = async () => {
+        try {
+          const r = await api.post(`/api/rooms/invitations/${id}/accept`, {});
+          store.state.invitations = (store.state.invitations || []).filter((i) => i.id !== id);
+          renderInvitationsBadge();
+          await reloadSidebar();
+          toast('Joined the room');
+          closeModal();
+          if (r && r.roomId) openRoom(r.roomId);
+        } catch (e) { toast(e.message, 'error'); }
+      };
+      el.querySelector('[data-act="decline"]').onclick = async () => {
+        try {
+          await api.post(`/api/rooms/invitations/${id}/decline`, {});
+          store.state.invitations = (store.state.invitations || []).filter((i) => i.id !== id);
+          renderInvitationsBadge();
+          el.remove();
+          if (!store.state.invitations.length) closeModal();
+        } catch (e) { toast(e.message, 'error'); }
+      };
+    });
   }
 
   // ---------- Sidebar ----------
@@ -623,6 +702,10 @@
     ws.on('friend:accepted', () => { reloadSidebar(); });
     ws.on('friend:removed', () => { reloadSidebar(); });
     ws.on('session:revoked', () => { location.href = '/'; });
+    ws.on('invite:received', (p) => {
+      toast(`Invitation: ${p.roomName} from ${p.inviter_username || '?'}`);
+      loadInvitations();
+    });
   }
 
   // ---------- Presence heartbeat ----------
@@ -904,9 +987,9 @@
         if (!username) { msg.textContent = 'Enter username'; msg.className = 'error'; return; }
         try {
           await api.post(`/api/rooms/${roomId}/invite-user`, { username });
-          msg.textContent = `Invited ${username}`; msg.className = 'ok';
+          msg.textContent = `Invitation sent to ${username} — waiting for them to accept.`;
+          msg.className = 'ok';
           body.querySelector('#iv-uname').value = '';
-          await loadMembers(roomId);
         } catch (e) { msg.textContent = e.message; msg.className = 'error'; }
       };
       body.querySelector('#iv-gen').onclick = async () => {
@@ -925,9 +1008,12 @@
         <div class="mr-card">
           <div class="row"><label>Room name</label><input id="st-name" value="${esc(room.name)}" ${isOwner ? '' : 'disabled'}></div>
           <div class="row"><label>Description</label><input id="st-desc" value="${esc(room.description || '')}"></div>
-          <div class="row"><label>Visibility</label>
-            <label><input type="radio" name="st-type" value="public" ${room.type === 'public' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Public</label>
-            <label style="margin-left:12px;"><input type="radio" name="st-type" value="private" ${room.type === 'private' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Private</label>
+          <div class="row">
+            <label class="field-label">Visibility</label>
+            <div class="radio-group">
+              <label><input type="radio" name="st-type" value="public" ${room.type === 'public' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Public</label>
+              <label><input type="radio" name="st-type" value="private" ${room.type === 'private' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Private</label>
+            </div>
           </div>
           <div id="st-msg" style="font-size:12px;"></div>
           <div class="actions" style="margin-top:10px;display:flex;justify-content:space-between;">
@@ -1162,6 +1248,7 @@
     $('menu-change-pw').onclick = () => { pm.classList.add('hidden'); openChangePasswordModal(); };
     $('menu-delete-acc').onclick = () => { pm.classList.add('hidden'); openDeleteAccountModal(); };
     $('btn-signout').onclick = async () => { try { await api.post('/api/auth/logout'); } catch (_) {} location.href = '/'; };
+    $('btn-invitations').onclick = openInvitationsModal;
 
     // Sidebar collapse toggles (persisted in localStorage)
     const appEl = document.querySelector('.app');

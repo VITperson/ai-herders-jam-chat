@@ -317,17 +317,111 @@ async function inviteUserByUsername(actorId, roomId, username) {
     await assertAdmin(roomId, actorId);
     const room = await getRoom(roomId);
     if (!room || room.deleted_at) throw httpError(404, 'room_not_found', 'room not found');
-    const u = await query('SELECT id FROM users WHERE username=$1 AND deleted_at IS NULL', [username]);
+    const u = await query('SELECT id, username::text AS username FROM users WHERE username=$1 AND deleted_at IS NULL', [username]);
     if (!u.rows[0]) throw httpError(404, 'user_not_found', 'user not found');
     const targetId = u.rows[0].id;
+    if (targetId === actorId) throw httpError(400, 'self_invite', 'cannot invite yourself');
     if (await isBannedFromRoom(roomId, targetId)) {
         throw httpError(409, 'user_banned', 'user is banned from this room; unban first');
     }
-    await query(
-        "INSERT INTO room_members (room_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING",
-        [roomId, targetId]
+    const existingRole = await getMyRole(roomId, targetId);
+    if (existingRole) throw httpError(409, 'already_member', 'user is already a member');
+
+    const inviter = await query('SELECT username::text AS username FROM users WHERE id=$1', [actorId]);
+    try {
+        const { rows } = await query(
+            `INSERT INTO room_invitations (room_id, user_id, inviter_id)
+             VALUES ($1,$2,$3)
+             RETURNING id, created_at`,
+            [roomId, targetId, actorId]
+        );
+        return {
+            invitationId: rows[0].id,
+            created_at: rows[0].created_at,
+            userId: targetId,
+            username: u.rows[0].username,
+            roomId,
+            roomName: room.name,
+            inviter_username: inviter.rows[0] ? inviter.rows[0].username : null,
+        };
+    } catch (e) {
+        if (e && e.code === '23505') {
+            throw httpError(409, 'already_invited', 'invitation already pending');
+        }
+        throw e;
+    }
+}
+
+async function listMyInvitations(userId) {
+    const { rows } = await query(
+        `SELECT inv.id, inv.room_id, inv.created_at,
+                r.name::text       AS room_name,
+                r.type             AS room_type,
+                u.username::text   AS inviter_username
+         FROM room_invitations inv
+         JOIN rooms r ON r.id = inv.room_id AND r.deleted_at IS NULL
+         LEFT JOIN users u ON u.id = inv.inviter_id
+         WHERE inv.user_id = $1
+         ORDER BY inv.created_at DESC`,
+        [userId]
     );
-    return { userId: targetId, username };
+    return rows;
+}
+
+async function acceptInvitation(userId, invitationId) {
+    const client = await getClient();
+    try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+            'SELECT id, room_id FROM room_invitations WHERE id=$1 AND user_id=$2 FOR UPDATE',
+            [invitationId, userId]
+        );
+        if (!rows[0]) {
+            await client.query('ROLLBACK');
+            throw httpError(404, 'invitation_not_found', 'invitation not found');
+        }
+        const roomId = rows[0].room_id;
+        const roomRes = await client.query(
+            'SELECT id, name, type, description FROM rooms WHERE id=$1 AND deleted_at IS NULL',
+            [roomId]
+        );
+        if (!roomRes.rows[0]) {
+            await client.query('DELETE FROM room_invitations WHERE id=$1', [invitationId]);
+            await client.query('COMMIT');
+            throw httpError(404, 'room_not_found', 'room no longer exists');
+        }
+        const banRes = await client.query(
+            'SELECT 1 FROM room_bans WHERE room_id=$1 AND user_id=$2',
+            [roomId, userId]
+        );
+        if (banRes.rows[0]) {
+            await client.query('DELETE FROM room_invitations WHERE id=$1', [invitationId]);
+            await client.query('COMMIT');
+            throw httpError(403, 'banned_from_room', 'you are banned from this room');
+        }
+        await client.query(
+            `INSERT INTO room_members (room_id, user_id, role)
+             VALUES ($1, $2, 'member')
+             ON CONFLICT DO NOTHING`,
+            [roomId, userId]
+        );
+        await client.query('DELETE FROM room_invitations WHERE id=$1', [invitationId]);
+        await client.query('COMMIT');
+        return { roomId, room: roomRes.rows[0] };
+    } catch (e) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        throw e;
+    } finally {
+        client.release();
+    }
+}
+
+async function declineInvitation(userId, invitationId) {
+    const { rowCount } = await query(
+        'DELETE FROM room_invitations WHERE id=$1 AND user_id=$2',
+        [invitationId, userId]
+    );
+    if (!rowCount) throw httpError(404, 'invitation_not_found', 'invitation not found');
 }
 
 async function updateRoom(actorId, roomId, { name, description, type }) {
@@ -428,5 +522,8 @@ module.exports = {
     isRoomMember,
     listBanned,
     inviteUserByUsername,
+    listMyInvitations,
+    acceptInvitation,
+    declineInvitation,
     updateRoom,
 };

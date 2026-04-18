@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Chat</title>
   <link rel="stylesheet" href="/css/styles.css">
+  <script>(function(){try{var s=localStorage.getItem('theme');var d=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',s||(d?'dark':'light'));}catch(e){}})();</script>
 </head>
 <body>
   <div class="app">
@@ -17,6 +18,11 @@
         <button data-nav="sessions">Sessions</button>
       </nav>
       <div class="user">
+        <button class="icon-btn" id="btn-invitations" title="Invitations" aria-label="Invitations" style="position:relative;">
+          <span aria-hidden="true">✉</span>
+          <span id="invitations-badge" class="badge hidden" style="position:absolute;top:0;right:0;transform:translate(25%,-25%);">0</span>
+        </button>
+        <button class="icon-btn" id="btn-theme" title="Toggle theme" aria-label="Toggle theme" onclick="toggleTheme()">☾</button>
         <button class="menu-btn" id="profile-btn"><span id="me-username">…</span> ▼</button>
         <button class="secondary" id="btn-signout" style="margin-left:8px;">Sign out</button>
         <div id="profile-menu" class="profile-menu hidden">
@@ -99,6 +105,7 @@
   <script src="/js/api.js"></script>
   <script src="/js/ws.js"></script>
   <script src="/js/store.js"></script>
+  <script src="/js/theme.js"></script>
   <script src="/js/pages/app.js"></script>
 </body>
 </html>

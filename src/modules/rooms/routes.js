@@ -64,6 +64,30 @@ router.post('/join-by-token', validate(joinByTokenSchema), async (req, res, next
     } catch (e) { next(e); }
 });
 
+// Pending invitations for the current user — listed/accepted/declined by invitee.
+// Must come BEFORE /:id routes so "invitations" isn't parsed as a room UUID.
+router.get('/invitations', async (req, res, next) => {
+    try {
+        const invitations = await service.listMyInvitations(req.session.userId);
+        res.json({ invitations });
+    } catch (e) { next(e); }
+});
+
+router.post('/invitations/:id/accept', async (req, res, next) => {
+    try {
+        const r = await service.acceptInvitation(req.session.userId, req.params.id);
+        hub.broadcastToRoom(r.roomId, 'room:member-joined', { roomId: r.roomId, userId: req.session.userId });
+        res.json({ ok: true, roomId: r.roomId, room: r.room });
+    } catch (e) { next(e); }
+});
+
+router.post('/invitations/:id/decline', async (req, res, next) => {
+    try {
+        await service.declineInvitation(req.session.userId, req.params.id);
+        res.json({ ok: true });
+    } catch (e) { next(e); }
+});
+
 router.get('/:id', async (req, res, next) => {
     try {
         const id = parseRoomId(req.params.id);
@@ -121,9 +145,20 @@ router.post('/:id/invite-user', validate(inviteUserSchema), async (req, res, nex
     try {
         const id = parseRoomId(req.params.id);
         const r = await service.inviteUserByUsername(req.session.userId, id, req.body.username);
-        hub.broadcastToRoom(id, 'room:member-joined', { roomId: id, userId: r.userId });
-        hub.broadcastToUser(r.userId, 'room:invited', { roomId: id });
-        res.status(201).json({ ok: true, userId: r.userId });
+        // Notify the invitee of a pending invitation — NOT a join.
+        hub.broadcastToUser(r.userId, 'invite:received', {
+            invitationId: r.invitationId,
+            roomId: r.roomId,
+            roomName: r.roomName,
+            inviter_username: r.inviter_username,
+            created_at: r.created_at,
+        });
+        res.status(201).json({
+            ok: true,
+            invitationId: r.invitationId,
+            userId: r.userId,
+            username: r.username,
+        });
     } catch (e) { next(e); }
 });
 

@@ -78,6 +78,19 @@ async function runBootMigrations() {
                     CHECK (type IN ('public','private','dm'));
             END $$;
         `);
+        // Pending room invitations (direct, user-targeted).
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS room_invitations (
+                id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+                room_id    uuid        NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                inviter_id uuid        REFERENCES users(id) ON DELETE SET NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                UNIQUE (room_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS room_invitations_user_idx ON room_invitations(user_id);
+            CREATE INDEX IF NOT EXISTS room_invitations_room_idx ON room_invitations(room_id);
+        `);
     } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[boot] migration failed', err && err.message);

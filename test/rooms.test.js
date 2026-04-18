@@ -97,24 +97,121 @@ test('admin /ban removes user and blocks rejoin (403 banned_from_room)', async (
     assert.equal(rejoin.data.error.code, 'banned_from_room');
 });
 
+test('invite-user creates pending invitation, not direct membership', async () => {
+    const { jar: ownerJar } = await freshUser('piown');
+    const { jar: inviteeJar, user: invitee } = await freshUser('pimem');
+    const room = await createRoom(ownerJar, { type: 'private' });
+
+    const invite = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: invitee.username }, jar: ownerJar,
+    });
+    assert.equal(invite.status, 201);
+    assert.ok(invite.data.invitationId);
+
+    // Invitee is NOT yet a member.
+    const view = await apiFetch(`/api/rooms/${room.id}`, { jar: inviteeJar });
+    assert.ok([404, 200].includes(view.status));
+    if (view.status === 200) assert.notEqual(view.data.myRole, 'member');
+
+    // Invitee sees it in the pending list.
+    const list = await apiFetch('/api/rooms/invitations', { jar: inviteeJar });
+    assert.equal(list.status, 200);
+    const pending = list.data.invitations.find((i) => i.room_id === room.id);
+    assert.ok(pending, 'pending invitation missing from list');
+});
+
 test('invite-user to a banned user is rejected (409 user_banned)', async () => {
     const { jar: ownerJar } = await freshUser('invbown');
     const { jar: memberJar, user: member } = await freshUser('invbmem');
-    const room = await createRoom(ownerJar, { type: 'private' });
-    await apiFetch(`/api/rooms/${room.id}/invite-user`, {
-        method: 'POST',
-        body: { username: member.username },
-        jar: ownerJar,
-    });
-    // ban them
+    const room = await createRoom(ownerJar, { type: 'public' });
+    // Join + ban (ban requires membership)
+    await apiFetch(`/api/rooms/${room.id}/join`, { method: 'POST', jar: memberJar });
     await apiFetch(`/api/rooms/${room.id}/members/${member.id}/ban`, { method: 'POST', jar: ownerJar });
 
     const invite = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
-        method: 'POST',
-        body: { username: member.username },
-        jar: ownerJar,
+        method: 'POST', body: { username: member.username }, jar: ownerJar,
     });
     assert.equal(invite.status, 409, `expected 409: ${JSON.stringify(invite.data)}`);
+    assert.equal(invite.data.error.code, 'user_banned');
+});
+
+test('invite-user to existing member is rejected (409 already_member)', async () => {
+    const { jar: ownerJar } = await freshUser('amown');
+    const { jar: memberJar, user: member } = await freshUser('ammem');
+    const room = await createRoom(ownerJar, { type: 'public' });
+    await apiFetch(`/api/rooms/${room.id}/join`, { method: 'POST', jar: memberJar });
+
+    const res = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: member.username }, jar: ownerJar,
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.data.error.code, 'already_member');
+});
+
+test('duplicate invite is rejected (409 already_invited)', async () => {
+    const { jar: ownerJar } = await freshUser('diown');
+    const { user: invitee } = await freshUser('dimem');
+    const room = await createRoom(ownerJar, { type: 'private' });
+    const first = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: invitee.username }, jar: ownerJar,
+    });
+    assert.equal(first.status, 201);
+    const second = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: invitee.username }, jar: ownerJar,
+    });
+    assert.equal(second.status, 409);
+    assert.equal(second.data.error.code, 'already_invited');
+});
+
+test('accept invitation makes invitee a member', async () => {
+    const { jar: ownerJar } = await freshUser('acown');
+    const { jar: inviteeJar, user: invitee } = await freshUser('acmem');
+    const room = await createRoom(ownerJar, { type: 'private' });
+
+    const invite = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: invitee.username }, jar: ownerJar,
+    });
+    assert.equal(invite.status, 201);
+    const invitationId = invite.data.invitationId;
+
+    const accept = await apiFetch(`/api/rooms/invitations/${invitationId}/accept`, {
+        method: 'POST', jar: inviteeJar,
+    });
+    assert.equal(accept.status, 200);
+    assert.equal(accept.data.roomId, room.id);
+
+    const view = await apiFetch(`/api/rooms/${room.id}`, { jar: inviteeJar });
+    assert.equal(view.status, 200);
+    assert.equal(view.data.myRole, 'member');
+
+    // Invitation gone from list.
+    const list = await apiFetch('/api/rooms/invitations', { jar: inviteeJar });
+    const stillThere = list.data.invitations.find((i) => i.id === invitationId);
+    assert.ok(!stillThere, 'invitation should be removed after accept');
+});
+
+test('decline invitation removes it and does NOT make invitee a member', async () => {
+    const { jar: ownerJar } = await freshUser('dcown');
+    const { jar: inviteeJar, user: invitee } = await freshUser('dcmem');
+    const room = await createRoom(ownerJar, { type: 'private' });
+
+    const invite = await apiFetch(`/api/rooms/${room.id}/invite-user`, {
+        method: 'POST', body: { username: invitee.username }, jar: ownerJar,
+    });
+    const invitationId = invite.data.invitationId;
+    const decline = await apiFetch(`/api/rooms/invitations/${invitationId}/decline`, {
+        method: 'POST', jar: inviteeJar,
+    });
+    assert.equal(decline.status, 200);
+
+    const list = await apiFetch('/api/rooms/invitations', { jar: inviteeJar });
+    const stillThere = list.data.invitations.find((i) => i.id === invitationId);
+    assert.ok(!stillThere);
+
+    // Not a member either.
+    const view = await apiFetch(`/api/rooms/${room.id}`, { jar: inviteeJar });
+    assert.ok([404, 200].includes(view.status));
+    if (view.status === 200) assert.notEqual(view.data.myRole, 'member');
 });
 
 test('unbanned user can rejoin after /unban', async () => {

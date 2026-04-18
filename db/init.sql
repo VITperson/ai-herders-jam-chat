@@ -147,6 +147,21 @@ CREATE TABLE IF NOT EXISTS room_invites (
 CREATE INDEX IF NOT EXISTS room_invites_room_idx ON room_invites(room_id);
 
 -- ===========================================================================
+-- ROOM INVITATIONS (pending direct invites to a specific user — owner/admin
+-- sends them, invitee can accept or decline; accepting upgrades to room_members)
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS room_invitations (
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id    uuid        NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    inviter_id uuid        REFERENCES users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (room_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS room_invitations_user_idx ON room_invitations(user_id);
+CREATE INDEX IF NOT EXISTS room_invitations_room_idx ON room_invitations(room_id);
+
+-- ===========================================================================
 -- MESSAGES (soft-delete; author_id nullable after user soft-delete)
 -- ===========================================================================
 CREATE TABLE IF NOT EXISTS messages (
