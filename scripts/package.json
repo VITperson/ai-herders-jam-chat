@@ -1,0 +1,9 @@
+{
+  "name": "xmpp-federation-tests",
+  "private": true,
+  "type": "commonjs",
+  "description": "Smoke + load tests for the XMPP federation demo. Run on the host, not inside containers.",
+  "dependencies": {
+    "@xmpp/client": "^0.13.1"
+  }
+}

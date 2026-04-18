@@ -94,6 +94,22 @@ router.post('/login', async (req, res, next) => {
     } catch (e) { next(e); }
 });
 
+// Credential-check endpoint for the XMPP bridge (prosody's mod_auth_http_bridge).
+// Receives form-encoded {user, pass}; returns 200 OK on valid creds, 401 otherwise.
+// Not a login — no session is created. Public by design (reached via internal
+// docker network from the XMPP container); there's no rate limiting.
+router.post('/xmpp-check', async (req, res) => {
+    const user = typeof req.body?.user === 'string' ? req.body.user : '';
+    const pass = typeof req.body?.pass === 'string' ? req.body.pass : '';
+    if (!user || !pass) return res.status(400).type('text/plain').send('bad request');
+    try {
+        await service.authenticate(user, pass);
+        return res.status(200).type('text/plain').send('ok');
+    } catch (_) {
+        return res.status(401).type('text/plain').send('no');
+    }
+});
+
 router.post('/logout', async (req, res, next) => {
     try {
         if (req.session && req.session.userId) {
