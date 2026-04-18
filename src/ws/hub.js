@@ -120,10 +120,37 @@ function evictUserFromRoom(userId, roomId) {
     }
 }
 
+// Emit session:revoked and forcibly disconnect the given session's sockets.
+function revokeSessionSid(sid) {
+    if (!ioRef) return;
+    for (const [, sock] of ioRef.sockets.sockets) {
+        if (sock.sid === sid) {
+            try { sock.emit('session:revoked', { sid }); } catch (_) {}
+            try { sock.disconnect(true); } catch (_) {}
+        }
+    }
+}
+
+// Revoke every socket of a user except those belonging to keepSid.
+function revokeUserSessionsExcept(userId, keepSid) {
+    if (!ioRef) return;
+    const set = userSockets.get(userId);
+    if (!set) return;
+    for (const sockId of Array.from(set)) {
+        const sock = ioRef.sockets.sockets.get(sockId);
+        if (sock && sock.sid !== keepSid) {
+            try { sock.emit('session:revoked', { sid: sock.sid }); } catch (_) {}
+            try { sock.disconnect(true); } catch (_) {}
+        }
+    }
+}
+
 module.exports = {
     attachIO,
     getIO,
     broadcastToRoom,
     broadcastToUser,
     evictUserFromRoom,
+    revokeSessionSid,
+    revokeUserSessionsExcept,
 };

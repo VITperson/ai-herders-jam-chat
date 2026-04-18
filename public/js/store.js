@@ -15,6 +15,7 @@
     oldestCursor: {},   // roomId -> oldest loaded id (for infinite scroll)
     hasMore: {},        // roomId -> bool
     latestSeenId: {},   // roomId -> highest message id seen (watermark for gap fill)
+    typing: {},         // roomId -> { userId: timeoutHandle }
   };
   function emit(type, detail) {
     bus.dispatchEvent(new CustomEvent(type, { detail }));

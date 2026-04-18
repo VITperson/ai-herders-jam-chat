@@ -5,6 +5,7 @@ const { z } = require('zod');
 
 const service = require('./service');
 const requireAuth = require('../../middleware/requireAuth');
+const hub = require('../../ws/hub');
 
 const router = express.Router();
 
@@ -125,6 +126,7 @@ router.post('/password/change', requireAuth, async (req, res, next) => {
         await service.changePassword(req.session.userId, body.oldPassword, body.newPassword);
         // Force-logout all other sessions for this user.
         await service.revokeOtherSessions(req.session.userId, req.sessionID);
+        hub.revokeUserSessionsExcept(req.session.userId, req.sessionID);
         res.json({ ok: true });
     } catch (e) { next(e); }
 });
@@ -133,6 +135,8 @@ router.delete('/account', requireAuth, async (req, res, next) => {
     try {
         const userId = req.session.userId;
         await service.deleteAccount(userId);
+        // Push revoke to all other sockets of this user before destroying current session.
+        hub.revokeUserSessionsExcept(userId, req.sessionID);
         try { await destroySession(req); } catch (_) { /* session row already gone */ }
         res.clearCookie('chat.sid', { path: '/' });
         res.json({ ok: true });
@@ -155,6 +159,7 @@ router.delete('/sessions/:sid', requireAuth, async (req, res, next) => {
             return res.json({ ok: true, current: true });
         }
         await service.revokeSession(req.session.userId, sid);
+        hub.revokeSessionSid(sid);
         res.json({ ok: true });
     } catch (e) { next(e); }
 });

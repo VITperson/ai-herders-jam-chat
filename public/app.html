@@ -55,11 +55,11 @@
 
     <main class="main">
       <div class="chat-header">
-        <div>
+        <div class="chat-title-block">
           <div class="title" id="chat-title">Select a room</div>
           <div class="desc" id="chat-desc"></div>
         </div>
-        <div>
+        <div class="chat-actions">
           <button class="secondary" id="btn-manage-room" style="display:none;">Manage</button>
           <button class="secondary" id="btn-leave-room" style="display:none;">Leave</button>
         </div>
@@ -68,6 +68,7 @@
         <div class="empty-state">No room selected. Pick one from the sidebar or create a new one.</div>
       </div>
       <div class="input-wrap" id="input-wrap" style="display:none;">
+        <div id="typing-indicator" class="typing-indicator hidden"></div>
         <div id="reply-preview" class="reply-preview hidden"></div>
         <div id="attach-preview" class="attach-preview"></div>
         <div class="input-row">
@@ -79,13 +80,16 @@
       </div>
     </main>
 
-    <aside class="members">
+    <aside class="members" id="members-panel">
       <h3>Members</h3>
       <div id="member-list"></div>
       <div class="actions">
         <button class="secondary" id="btn-invite-user" style="display:none;">Invite user</button>
       </div>
     </aside>
+
+    <button class="panel-toggle" id="toggle-left" title="Toggle sidebar" aria-label="Toggle sidebar">◀</button>
+    <button class="panel-toggle" id="toggle-right" title="Toggle members" aria-label="Toggle members">▶</button>
   </div>
 
   <div id="modal-root"></div>

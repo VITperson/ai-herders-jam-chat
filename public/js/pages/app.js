@@ -222,6 +222,46 @@
     await loadMessages(roomId, null);
     renderMessages(roomId, { scrollToBottom: true });
     loadMembers(roomId);
+    renderTypingIndicator();
+  }
+
+  // Typing sender state (shared between input handler and sendMessage).
+  let typingSent = false;
+  let typingStopTimer = null;
+  function sendTypingStart() {
+    const rid = store.state.activeRoomId;
+    if (!rid) return;
+    if (!typingSent) { ws.emit('typing:start', { roomId: rid }); typingSent = true; }
+    clearTimeout(typingStopTimer);
+    typingStopTimer = setTimeout(sendTypingStop, 3000);
+  }
+  function sendTypingStop() {
+    const rid = store.state.activeRoomId;
+    clearTimeout(typingStopTimer);
+    typingStopTimer = null;
+    if (!typingSent) return;
+    typingSent = false;
+    if (rid) ws.emit('typing:stop', { roomId: rid });
+  }
+
+  function renderTypingIndicator() {
+    const el = $('typing-indicator');
+    if (!el) return;
+    const rid = store.state.activeRoomId;
+    const map = (rid && store.state.typing[rid]) || {};
+    const uids = Object.keys(map);
+    if (!uids.length) { el.classList.add('hidden'); el.textContent = ''; return; }
+    const members = (store.state.members[rid] || []);
+    const names = uids.map(uid => {
+      const m = members.find(x => (x.user_id || x.id) === uid);
+      return (m && m.username) || 'someone';
+    });
+    let text;
+    if (names.length === 1) text = `${names[0]} is typing…`;
+    else if (names.length === 2) text = `${names[0]} and ${names[1]} are typing…`;
+    else text = `${names.length} people are typing…`;
+    el.textContent = text;
+    el.classList.remove('hidden');
   }
 
   function bumpWatermark(roomId, id) {
@@ -445,6 +485,7 @@
     const body = ta.value;
     const atts = store.state.pendingAttachments.slice();
     if (!body.trim() && !atts.length) return;
+    sendTypingStop();
     const payload = { body };
     if (atts.length) payload.attachment_ids = atts.map(a => a.id);
     if (store.state.replyTo) payload.reply_to_id = store.state.replyTo.id;
@@ -510,6 +551,18 @@
       renderRoomLists();
       renderContacts();
       if (!(store.state.rooms || []).some(r => r.id === p.roomId)) reloadSidebar();
+    });
+    ws.on('typing:event', (p) => {
+      if (!p || !p.roomId || !p.userId) return;
+      if (store.state.me && p.userId === store.state.me.id) return;
+      const map = store.state.typing[p.roomId] = store.state.typing[p.roomId] || {};
+      if (p.active) {
+        if (map[p.userId]) clearTimeout(map[p.userId]);
+        map[p.userId] = setTimeout(() => { delete map[p.userId]; renderTypingIndicator(); }, 5000);
+      } else {
+        if (map[p.userId]) { clearTimeout(map[p.userId]); delete map[p.userId]; }
+      }
+      renderTypingIndicator();
     });
     ws.on('room:member-joined', () => { const r = store.state.activeRoomId; if (r) loadMembers(r); });
     ws.on('room:member-left', () => { const r = store.state.activeRoomId; if (r) loadMembers(r); });
@@ -1110,6 +1163,19 @@
     $('menu-delete-acc').onclick = () => { pm.classList.add('hidden'); openDeleteAccountModal(); };
     $('btn-signout').onclick = async () => { try { await api.post('/api/auth/logout'); } catch (_) {} location.href = '/'; };
 
+    // Sidebar collapse toggles (persisted in localStorage)
+    const appEl = document.querySelector('.app');
+    if (localStorage.getItem('leftCollapsed') === '1') appEl.classList.add('left-collapsed');
+    if (localStorage.getItem('rightCollapsed') === '1') appEl.classList.add('right-collapsed');
+    $('toggle-left').onclick = () => {
+      appEl.classList.toggle('left-collapsed');
+      localStorage.setItem('leftCollapsed', appEl.classList.contains('left-collapsed') ? '1' : '0');
+    };
+    $('toggle-right').onclick = () => {
+      appEl.classList.toggle('right-collapsed');
+      localStorage.setItem('rightCollapsed', appEl.classList.contains('right-collapsed') ? '1' : '0');
+    };
+
     // Home (logo) — clear active room, show welcome
     $('logo-home').onclick = () => {
       const prev = store.state.activeRoomId;
@@ -1222,7 +1288,9 @@
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
-    $('btn-send').onclick = sendMessage;
+    ta.addEventListener('input', () => { if (ta.value.trim()) sendTypingStart(); else sendTypingStop(); });
+    ta.addEventListener('blur', sendTypingStop);
+    $('btn-send').onclick = () => { sendTypingStop(); sendMessage(); };
     $('btn-attach').onclick = () => $('file-input').click();
     $('file-input').onchange = async (e) => {
       for (const f of e.target.files) await uploadFile(f);
