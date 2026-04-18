@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chat</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="logo">Chat</div>
+      <nav>
+        <button data-nav="rooms-public">Public Rooms</button>
+        <button data-nav="rooms-private">Private Rooms</button>
+        <button data-nav="contacts">Contacts</button>
+        <button data-nav="sessions">Sessions</button>
+      </nav>
+      <div class="user">
+        <button class="menu-btn" id="profile-btn"><span id="me-username">…</span> ▼</button>
+        <div id="profile-menu" class="profile-menu hidden">
+          <button id="menu-change-pw">Change password</button>
+          <button id="menu-delete-acc">Delete account</button>
+          <button id="menu-logout">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="search-wrap">
+        <input id="sidebar-search" placeholder="Search rooms/users…">
+      </div>
+      <div class="sections" id="sidebar-sections">
+        <div class="accordion" id="acc-public">
+          <div class="head">Public Rooms <span>+</span></div>
+          <div class="body" id="list-public"></div>
+        </div>
+        <div class="accordion" id="acc-private">
+          <div class="head">Private Rooms <span>+</span></div>
+          <div class="body" id="list-private"></div>
+        </div>
+        <div class="accordion" id="acc-contacts">
+          <div class="head">Contacts <span>+</span></div>
+          <div class="body" id="list-contacts"></div>
+        </div>
+        <div class="accordion" id="acc-search">
+          <div class="head">Search results <span>+</span></div>
+          <div class="body" id="list-search"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btn-create-room">+ Create room</button>
+        <button class="secondary" id="btn-browse-public" style="margin-top:6px;">Browse public rooms</button>
+        <button class="secondary" id="btn-join-token" style="margin-top:6px;">Join by invite token</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="chat-header">
+        <div>
+          <div class="title" id="chat-title">Select a room</div>
+          <div class="desc" id="chat-desc"></div>
+        </div>
+        <div>
+          <button class="secondary" id="btn-manage-room" style="display:none;">Manage</button>
+          <button class="secondary" id="btn-leave-room" style="display:none;">Leave</button>
+        </div>
+      </div>
+      <div class="messages" id="messages">
+        <div class="empty-state">No room selected. Pick one from the sidebar or create a new one.</div>
+      </div>
+      <div class="input-wrap" id="input-wrap" style="display:none;">
+        <div id="reply-preview" class="reply-preview hidden"></div>
+        <div id="attach-preview" class="attach-preview"></div>
+        <div class="input-row">
+          <button class="icon-btn" id="btn-attach" title="Attach file">📎</button>
+          <input type="file" id="file-input" multiple style="display:none;">
+          <textarea id="msg-input" placeholder="Type a message… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="btn-send">Send</button>
+        </div>
+      </div>
+    </main>
+
+    <aside class="members">
+      <h3>Members</h3>
+      <div id="member-list"></div>
+      <div class="actions">
+        <button class="secondary" id="btn-invite-user" style="display:none;">Invite user</button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/ws.js"></script>
+  <script src="/js/store.js"></script>
+  <script src="/js/pages/app.js"></script>
+</body>
+</html>

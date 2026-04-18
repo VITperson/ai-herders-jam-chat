@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Reset password — Chat</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div style="display:flex; flex-direction:column; gap:16px; width:100%; max-width:400px;">
+      <form id="req-form" class="auth-card">
+        <h1>Request reset</h1>
+        <label for="rq-email">Email</label>
+        <input id="rq-email" type="email" required>
+        <div id="rq-err" class="error"></div>
+        <div id="rq-ok" class="ok"></div>
+        <button type="submit">Send reset link</button>
+      </form>
+      <form id="reset-form" class="auth-card">
+        <h1>Reset password</h1>
+        <label for="rs-token">Token</label>
+        <input id="rs-token" required>
+        <label for="rs-pw">New password</label>
+        <input id="rs-pw" type="password" required minlength="8">
+        <div id="rs-err" class="error"></div>
+        <div id="rs-ok" class="ok"></div>
+        <button type="submit">Reset password</button>
+        <div class="row"><a href="/">Back to sign in</a></div>
+      </form>
+    </div>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/pages/reset.js"></script>
+</body>
+</html>

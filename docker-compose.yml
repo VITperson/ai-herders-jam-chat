@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+      POSTGRES_DB: chat
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://chat:chat@db:5432/chat
+      SESSION_SECRET: change-me
+      PORT: "3000"
+      UPLOAD_DIR: /app/uploads
+      MAX_FILE_MB: "20"
+      MAX_IMAGE_MB: "3"
+    volumes:
+      - uploads:/app/uploads
+    ports:
+      - "3000:3000"
+
+volumes:
+  pg_data:
+  uploads:
