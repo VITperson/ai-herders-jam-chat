@@ -8,16 +8,15 @@ services:
       chat_xmpp:
         aliases:
           - chat1.local
+      core_net: {}
     ports:
       - "5222:5222"
       - "5269:5269"
       - "5280:5280"
-    environment:
-      LOCAL: admin
-      DOMAIN: chat1.local
-      PASSWORD: admin01
+    # entrypoint auto-register is incompatible with http_bridge auth — disabled.
     volumes:
       - ./xmpp/chat1/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - ./xmpp/modules:/opt/prosody-modules:ro
       - xmpp1_data:/var/lib/prosody
 
   xmpp2:
@@ -29,16 +28,15 @@ services:
       chat_xmpp:
         aliases:
           - chat2.local
+      core_net: {}
     ports:
       - "5232:5222"
       - "5279:5269"
       - "5281:5280"
-    environment:
-      LOCAL: admin
-      DOMAIN: chat2.local
-      PASSWORD: admin02
+    # entrypoint auto-register is incompatible with http_bridge auth — disabled.
     volumes:
       - ./xmpp/chat2/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - ./xmpp/modules:/opt/prosody-modules:ro
       - xmpp2_data:/var/lib/prosody
 
 volumes:
@@ -47,3 +45,6 @@ volumes:
 
 networks:
   chat_xmpp:
+  core_net:
+    external: true
+    name: 180426_default

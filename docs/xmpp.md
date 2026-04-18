@@ -104,8 +104,60 @@ Gajim (cross-platform) works too; same settings, same flow.
 - **Self-signed certs.** `prosodyctl --root cert generate <domain>` populates `/etc/prosody/certs/<domain>.{crt,key}` inside each container; these are what s2s dialback uses.
 - **MUC is enabled** (`conference.chat1.local` / `conference.chat2.local`) but not tested automatically. For phase 4, `scripts/xmpp-loadtest.js` will drive it.
 
+## Phase 3 — auth bridge to chat-app users
+
+XMPP accounts live in the chat-app `users` table; prosody calls back to `/api/auth/xmpp-check` on every login. No more `prosodyctl register`.
+
+**How it works**
+
+- `xmpp/modules/mod_auth_http_bridge.lua` — custom prosody auth provider. Uses prosody's async HTTP client (`net.http` + `util.async.waiter`) to POST form-encoded `user`/`pass` to the chat-app. 2xx = accept.
+- `src/modules/auth/routes.js` gains `POST /api/auth/xmpp-check`. It reuses the existing `service.authenticate(login, pw)` — same function that powers the chat-app login form. Returns 200/401, creates no session.
+- `docker-compose.xmpp.yml` mounts the custom module into `/opt/prosody-modules` and attaches both prosody services to the core `180426_default` network so they can reach `web:3000`.
+
+**Flow**
+
+1. User registers normally in the chat-app web UI (`http://localhost:3000`) — e.g. `alice / alice@example.com / Secret01`.
+2. They open Gajim/Monal/xmpp.js pointing at `alice@chat1.local / Secret01` → prosody calls `web:3000/api/auth/xmpp-check` → 200 → login succeeds.
+3. Change password in chat-app → next XMPP login with the old password fails.
+4. Delete account in chat-app → `authenticate()` throws → XMPP login fails.
+
+**Smoke**
+
+```bash
+# 1. Bring up core + xmpp together
+docker compose up -d --build web db
+docker compose -f docker-compose.xmpp.yml up -d --build
+
+# 2. Register test users in the chat-app (not in prosody)
+curl -s -X POST -H 'Content-Type: application/json' \
+    -d '{"email":"alice@example.com","username":"alice","password":"Secret01"}' \
+    http://localhost:3000/api/auth/register
+curl -s -X POST -H 'Content-Type: application/json' \
+    -d '{"email":"carol@example.com","username":"carol","password":"Secret02"}' \
+    http://localhost:3000/api/auth/register
+
+# 3. First-time setup: issue self-signed certs and fix perms
+docker compose -f docker-compose.xmpp.yml exec xmpp1 \
+    prosodyctl --root cert generate chat1.local
+docker compose -f docker-compose.xmpp.yml exec xmpp1 \
+    sh -c 'chgrp -R prosody /etc/prosody/certs && chmod 640 /etc/prosody/certs/*.key'
+# (same for xmpp2 / chat2.local)
+docker compose -f docker-compose.xmpp.yml restart xmpp1 xmpp2
+
+# 4. Run the smoke test
+cd scripts && node xmpp-smoke.js
+```
+
+You should see the same `[ok] s2s federation works` — but now the auth is driven by the chat-app's bcrypt-hashed `users.password_hash`, not prosody's internal store.
+
+Run `docker compose logs --since 30s web | grep xmpp-check` to see the bridge calls arrive; run `docker compose -f docker-compose.xmpp.yml logs --since 30s xmpp1 | grep auth_http_bridge` for the prosody side.
+
+**Caveats**
+
+- `mod_auth_http_bridge` blocks the SASL coroutine while it awaits the HTTP response. Fine for a demo; for real traffic you'd want `util.async` done right and a pooled HTTP client.
+- `/api/auth/xmpp-check` is a public endpoint — no rate limiting, no authentication. It's only safe because in this setup it's reachable only from the internal docker network (`180426_default`) and the host's `localhost:3000`. A production deployment would gate it behind a shared secret or mTLS.
+- User deletion in the chat-app doesn't proactively revoke active XMPP sessions — next login will fail, but an existing stream keeps working until it naturally reconnects. Fix would be to push a stanza-level `session:revoked` from the chat-app, analogous to what we already do for web sessions.
+
 ## Relationship to the core chat app
 
-There is **no bridge** between the prosody users and the `users` table in the chat app yet. The two stacks are independent: XMPP accounts are stored inside each Prosody container's `/var/lib/prosody/<domain>/accounts/*.dat`. A future phase-3 change (`src/modules/auth/routes.js` + `xmpp/extauth.js` + custom ejabberd image) would let any chat-app user log in via Monal with their chat credentials.
-
-The core `docker-compose.yml` remains completely untouched. You can bring the XMPP federation up and down independently without affecting the chat app.
+The core `docker-compose.yml` is still untouched. `src/modules/auth/routes.js` gained one additional route (`/xmpp-check`) behind no middleware; everything else in the app is unchanged. You can bring the XMPP federation up and down independently, and toggling XMPP off simply leaves that endpoint unused.

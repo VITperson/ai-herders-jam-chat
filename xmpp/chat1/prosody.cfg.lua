@@ -2,7 +2,7 @@
 
 admins = { "admin@chat1.local" }
 
-plugin_paths = { "/usr/lib/prosody/modules" }
+plugin_paths = { "/usr/lib/prosody/modules", "/opt/prosody-modules" }
 
 modules_enabled = {
     "roster";
@@ -30,9 +30,14 @@ modules_enabled = {
 }
 
 -- Plaintext passwords in Prosody's internal store
-authentication = "internal_plain"
+-- Phase 3: delegate password checks to the chat-app REST API.
+-- Mnesia user store is ignored; prosody has no local passwords.
+authentication = "http_bridge"
+auth_http_url = "http://web:3000/api/auth/xmpp-check"
 
--- Force PLAIN for the smoke-test client (xmpp.js 0.13 has a SCRAM-SHA-1 quirk with prosody 0.11)
+-- HTTP bridge only knows the plaintext password → PLAIN only (on the
+-- wire it's wrapped in SASL PLAIN; xmpp.js 0.13 also has a SCRAM quirk
+-- with prosody 0.11, so keeping these disabled simplifies both phases).
 disable_sasl_mechanisms = { "SCRAM-SHA-1", "SCRAM-SHA-1-PLUS", "SCRAM-SHA-256", "DIGEST-MD5" }
 
 -- Demo: allow plain SASL on unencrypted streams; don't require TLS

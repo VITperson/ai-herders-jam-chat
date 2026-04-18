@@ -13,6 +13,9 @@
 // Run:
 //   cd scripts && npm install && node xmpp-smoke.js
 
+// Demo servers use self-signed certificates. Accept them.
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const { client, xml } = require('@xmpp/client');
 
 const TIMEOUT_MS = 10_000;

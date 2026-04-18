@@ -1,33 +1,31 @@
 #!/bin/sh
-# Seed test users into the prosody containers.
-# Run AFTER `docker compose -f docker-compose.xmpp.yml up -d` has stabilized.
+# Seed test users for the XMPP demo.
 #
-# Idempotent: `prosodyctl register` returns non-zero if user already exists — we keep going.
+# With Phase 3 enabled (authentication = "http_bridge"), xmpp accounts live in
+# the chat-app. This script registers test users via the chat-app REST API.
+# If you switch prosody back to `authentication = "internal_plain"` you can
+# instead use `prosodyctl register` inside the containers.
+#
+# Run:  ./xmpp/seed.sh
+# Prereq: core (web + db) and xmpp containers are up.
 
 set -u
-CMD="docker compose -f docker-compose.xmpp.yml exec -T"
+API="${API:-http://localhost:3000}"
 
 register() {
-    svc=$1
-    user=$2
-    host=$3
-    pass=$4
-    echo "==> registering $user@$host on $svc"
-    $CMD "$svc" prosodyctl register "$user" "$host" "$pass" || true
+    email=$1; username=$2; password=$3
+    echo "==> registering $username"
+    curl -sS -o /dev/null -w "    register $username: %{http_code}\n" \
+        -X POST -H 'Content-Type: application/json' \
+        -d "{\"email\":\"$email\",\"username\":\"$username\",\"password\":\"$password\"}" \
+        "$API/api/auth/register" || true
+    curl -sS -o /dev/null -w "    xmpp-check $username: %{http_code}\n" \
+        -X POST "$API/api/auth/xmpp-check" \
+        --data-urlencode "user=$username" --data-urlencode "pass=$password" || true
 }
 
-register xmpp1 admin chat1.local admin01
-register xmpp1 alice chat1.local Secret01
-register xmpp1 bob   chat1.local Secret01
+register alice@example.com alice Secret01
+register bob@example.com   bob   Secret01
+register carol@example.com carol Secret02
 
-# Phase 2 (if xmpp2 is up):
-if docker compose -f docker-compose.xmpp.yml ps xmpp2 >/dev/null 2>&1; then
-    register xmpp2 admin chat2.local admin02
-    register xmpp2 carol chat2.local Secret02
-fi
-
-echo "==> done. Accounts on disk:"
-$CMD xmpp1 sh -c 'ls /var/lib/prosody/chat1%2elocal/accounts/ 2>/dev/null' || true
-if docker compose -f docker-compose.xmpp.yml ps xmpp2 >/dev/null 2>&1; then
-    $CMD xmpp2 sh -c 'ls /var/lib/prosody/chat2%2elocal/accounts/ 2>/dev/null' || true
-fi
+echo "==> done. All three users should return xmpp-check 200."

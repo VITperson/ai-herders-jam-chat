@@ -2,7 +2,7 @@
 
 admins = { "admin@chat2.local" }
 
-plugin_paths = { "/usr/lib/prosody/modules" }
+plugin_paths = { "/usr/lib/prosody/modules", "/opt/prosody-modules" }
 
 modules_enabled = {
     "roster";
@@ -29,9 +29,10 @@ modules_enabled = {
     "http";
 }
 
-authentication = "internal_plain"
+-- Phase 3: delegate password checks to the chat-app REST API.
+authentication = "http_bridge"
+auth_http_url = "http://web:3000/api/auth/xmpp-check"
 
--- Force PLAIN for the smoke-test client (xmpp.js 0.13 has a SCRAM-SHA-1 quirk with prosody 0.11)
 disable_sasl_mechanisms = { "SCRAM-SHA-1", "SCRAM-SHA-1-PLUS", "SCRAM-SHA-256", "DIGEST-MD5" }
 
 allow_unencrypted_plain_auth = true
