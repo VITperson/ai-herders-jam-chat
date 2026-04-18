@@ -45,6 +45,7 @@ app.use('/api/auth', require('./src/modules/auth/routes'));
 app.use('/api/users', require('./src/modules/users/routes'));
 app.use('/api/friends', require('./src/modules/friends/routes'));
 app.use('/api/rooms', require('./src/modules/rooms/routes'));
+app.use('/api/dm', require('./src/modules/dm/routes'));
 app.use('/api/attachments', require('./src/modules/attachments/routes'));
 // Messages router handles /rooms/:id/messages and /messages/:id under /api.
 app.use('/api', require('./src/modules/messages/routes'));
@@ -60,9 +61,34 @@ presence.startAfkTimer(io);
 app.set('io', io);
 
 // --- Boot --------------------------------------------------------------------
-server.listen(config.port, () => {
-    // eslint-disable-next-line no-console
-    console.log(`[web] listening on :${config.port} (env=${config.nodeEnv})`);
+async function runBootMigrations() {
+    try {
+        // Idempotent: allow 'dm' in rooms.type for existing DBs.
+        await pool.query(`
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint c
+                    JOIN pg_class t ON t.oid = c.conrelid
+                    WHERE t.relname = 'rooms' AND c.conname = 'rooms_type_check'
+                ) THEN
+                    ALTER TABLE rooms DROP CONSTRAINT rooms_type_check;
+                END IF;
+                ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
+                    CHECK (type IN ('public','private','dm'));
+            END $$;
+        `);
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[boot] migration failed', err && err.message);
+    }
+}
+
+runBootMigrations().finally(() => {
+    server.listen(config.port, () => {
+        // eslint-disable-next-line no-console
+        console.log(`[web] listening on :${config.port} (env=${config.nodeEnv})`);
+    });
 });
 
 function shutdown(signal) {

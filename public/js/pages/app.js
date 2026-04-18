@@ -98,7 +98,7 @@
   function renderRoomLists() {
     const pub = $('list-public'); const prv = $('list-private');
     pub.innerHTML = ''; prv.innerHTML = '';
-    const rooms = store.state.rooms || [];
+    const rooms = (store.state.rooms || []).filter(r => r.type !== 'dm');
     const activeId = store.state.activeRoomId;
     if (!rooms.length) {
       pub.innerHTML = '<div class="empty-state" style="padding:12px;">No public rooms</div>';
@@ -119,6 +119,39 @@
     if (!prv.children.length) prv.innerHTML = '<div class="empty-state" style="padding:12px;">No private rooms</div>';
   }
 
+  async function openDirectMessage(contactUserId, contactUsername) {
+    try {
+      const r = await api.post('/api/dm/' + contactUserId);
+      const roomId = r.roomId;
+      // Ensure the DM room is present in store.state.rooms so openRoom finds it.
+      if (!(store.state.rooms || []).some(x => x.id === roomId)) {
+        (store.state.rooms = store.state.rooms || []).push({
+          id: roomId, name: contactUsername, type: 'dm', description: '', role: 'member',
+          dm_other_username: contactUsername,
+        });
+      } else {
+        const existing = store.state.rooms.find(x => x.id === roomId);
+        existing.dm_other_username = contactUsername;
+      }
+      openRoom(roomId);
+    } catch (e) { toast('DM failed: ' + e.message, 'error'); }
+  }
+
+  // Build map: otherUserId -> dmRoomId (parsed from `dm:uuidA:uuidB` names).
+  function dmRoomByUserMap() {
+    const map = {};
+    const myId = store.state.me && store.state.me.id;
+    for (const r of (store.state.rooms || [])) {
+      if (r.type !== 'dm' || !r.name) continue;
+      const m = /^dm:([0-9a-f-]+):([0-9a-f-]+)$/i.exec(r.name);
+      if (!m) continue;
+      const [, a, b] = m;
+      const other = a === myId ? b : (b === myId ? a : null);
+      if (other) map[other] = r.id;
+    }
+    return map;
+  }
+
   function renderContacts() {
     const list = $('list-contacts');
     list.innerHTML = '';
@@ -127,14 +160,20 @@
       list.innerHTML = '<div class="empty-state" style="padding:12px;">No contacts. Use search to add friends.</div>';
       return;
     }
+    const dmMap = dmRoomByUserMap();
     for (const c of cs) {
       const uid = c.user_id || c.id;
       const uname = c.username || c.user_username || '?';
       const status = c.status || 'accepted';
       const pres = store.state.presence[uid] || 'offline';
+      const dmRoomId = dmMap[uid];
+      const unread = dmRoomId ? (store.state.unread[dmRoomId] || 0) : 0;
       const div = document.createElement('div');
       div.className = 'item';
-      div.innerHTML = `<span class="dot ${pres}"></span><span class="name">${esc(uname)}</span><span class="role">${esc(status)}</span>`;
+      const trailing = unread
+        ? `<span class="badge">${unread}</span>`
+        : (status !== 'accepted' ? `<span class="role">${esc(status)}</span>` : '');
+      div.innerHTML = `<span class="dot ${pres}"></span><span class="name">${esc(uname)}</span>${trailing}`;
       if (status === 'pending') {
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:4px;';
@@ -145,7 +184,10 @@
           div.appendChild(actions);
         }
       }
-      div.onclick = () => toast('Personal DM: coming soon. For now please use rooms.');
+      div.onclick = () => {
+        if (status === 'accepted') openDirectMessage(uid, uname);
+        else toast('Accept the request to start a DM.');
+      };
       list.appendChild(div);
     }
   }
@@ -159,12 +201,14 @@
     store.setActiveRoom(roomId);
     store.state.unread[roomId] = 0;
     renderRoomLists();
-    $('chat-title').textContent = room.name;
-    $('chat-desc').textContent = room.description || '';
+    renderContacts();
+    const isDM = room.type === 'dm';
+    $('chat-title').textContent = isDM ? (room.dm_other_username || 'Direct message') : room.name;
+    $('chat-desc').textContent = isDM ? 'Direct message' : (room.description || '');
     $('input-wrap').style.display = '';
-    $('btn-manage-room').style.display = (room.role === 'owner' || room.role === 'admin') ? '' : 'none';
-    $('btn-leave-room').style.display = (room.role !== 'owner') ? '' : 'none';
-    $('btn-invite-user').style.display = (room.role === 'owner' || room.role === 'admin') ? '' : 'none';
+    $('btn-manage-room').style.display = (!isDM && (room.role === 'owner' || room.role === 'admin')) ? '' : 'none';
+    $('btn-leave-room').style.display = (!isDM && room.role !== 'owner') ? '' : 'none';
+    $('btn-invite-user').style.display = (!isDM && (room.role === 'owner' || room.role === 'admin')) ? '' : 'none';
 
     // Subscribe via WS
     ws.emit('room:subscribe', { roomId }, (res) => {
@@ -239,6 +283,16 @@
       const members = r.members || r;
       store.state.members[roomId] = members;
       renderMembers(roomId);
+      // For DM rooms, once members are known, set the header to the other user.
+      const room = (store.state.rooms || []).find(x => x.id === roomId);
+      if (room && room.type === 'dm') {
+        const myId = store.state.me && store.state.me.id;
+        const other = members.find(m => (m.user_id || m.id) !== myId);
+        if (other) {
+          room.dm_other_username = other.username;
+          if (store.state.activeRoomId === roomId) $('chat-title').textContent = other.username;
+        }
+      }
     } catch (e) { console.warn('members failed', e); }
   }
 
@@ -425,7 +479,9 @@
       arr.push(m);
       bumpWatermark(rid, m.id);
       if (rid === store.state.activeRoomId) appendMessage(m);
-      else { store.state.unread[rid] = (store.state.unread[rid] || 0) + 1; renderRoomLists(); }
+      else { store.state.unread[rid] = (store.state.unread[rid] || 0) + 1; renderRoomLists(); renderContacts(); }
+      // If this is a room we haven't seen yet (first-time DM), refresh sidebar.
+      if (!(store.state.rooms || []).some(r => r.id === rid)) reloadSidebar();
     });
     ws.on('message:edit', (p) => {
       const arr = store.state.messages[p.room_id] || [];
@@ -452,6 +508,8 @@
       if (typeof p.count === 'number') store.state.unread[p.roomId] = p.count;
       else store.state.unread[p.roomId] = (store.state.unread[p.roomId] || 0) + 1;
       renderRoomLists();
+      renderContacts();
+      if (!(store.state.rooms || []).some(r => r.id === p.roomId)) reloadSidebar();
     });
     ws.on('room:member-joined', () => { const r = store.state.activeRoomId; if (r) loadMembers(r); });
     ws.on('room:member-left', () => { const r = store.state.activeRoomId; if (r) loadMembers(r); });

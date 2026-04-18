@@ -96,7 +96,7 @@ CREATE INDEX IF NOT EXISTS user_bans_blocked_idx ON user_bans(blocked);
 CREATE TABLE IF NOT EXISTS rooms (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        citext      NOT NULL,
-    type        text        NOT NULL CHECK (type IN ('public', 'private')),
+    type        text        NOT NULL CHECK (type IN ('public', 'private', 'dm')),
     description text,
     owner_id    uuid        REFERENCES users(id) ON DELETE SET NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
