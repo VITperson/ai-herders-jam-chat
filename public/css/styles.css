@@ -854,3 +854,95 @@ input[type="radio"], input[type="checkbox"] {
   0%   { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
   100% { background: transparent; box-shadow: none; }
 }
+
+/* ========================================================================
+   Easter eggs
+   ======================================================================= */
+
+/* A. Konami confetti — teal/green palette, falls from top */
+.confetti-piece {
+  position: fixed;
+  top: -12px;
+  width: 8px; height: 14px;
+  pointer-events: none;
+  z-index: 9999;
+  border-radius: 2px;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(.25,.6,.35,1);
+  animation-fill-mode: forwards;
+}
+@keyframes confetti-fall {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(110vh) rotate(720deg); opacity: 0.25; }
+}
+
+/* C. /baa walking sheep across the messages pane */
+.main { position: relative; }
+.easter-sheep {
+  position: absolute;
+  bottom: 90px;
+  left: -60px;
+  font-size: 34px;
+  pointer-events: none;
+  z-index: 5;
+  animation: sheep-walk 4.2s linear forwards;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,.25));
+}
+@keyframes sheep-walk {
+  0%   { left: -60px; transform: translateY(0)   scaleX(1); }
+  12%  { transform: translateY(-5px) scaleX(1); }
+  24%  { transform: translateY(2px)  scaleX(1); }
+  36%  { transform: translateY(-5px) scaleX(1); }
+  48%  { transform: translateY(2px)  scaleX(1); }
+  60%  { transform: translateY(-5px) scaleX(1); }
+  72%  { transform: translateY(2px)  scaleX(1); }
+  84%  { transform: translateY(-5px) scaleX(1); }
+  100% { left: 105%; transform: translateY(0) scaleX(1); }
+}
+
+/* D. CRT retro mode — green-on-black palette + scanlines + soft flicker */
+html.app-crt {
+  --bg:           #000000;
+  --bg-elev:      #001a0a;
+  --bg-elev-2:    #00311a;
+  --bg-sunken:    #000a04;
+  --border:       #005522;
+  --border-strong:#00aa44;
+  --text:         #00ff66;
+  --text-soft:    #00cc55;
+  --text-dim:     #008833;
+  --accent:       #00ff66;
+  --accent-hover: #77ffaa;
+  --accent-soft:  rgba(0,255,102,.18);
+  --off:          #005522;
+  --danger:       #ff6666;
+  --ok:           #00ff66;
+  --warn:         #ffdd55;
+}
+html.app-crt body {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  text-shadow: 0 0 2px rgba(0,255,102,.4);
+}
+html.app-crt .topbar .logo::before {
+  background: var(--accent);
+  box-shadow: inset -3px -3px 0 #000, 0 0 6px var(--accent);
+}
+html.app-crt body::after {
+  content: '';
+  position: fixed; inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0,0,0,0) 0,
+    rgba(0,0,0,0) 2px,
+    rgba(0,0,0,.18) 2px,
+    rgba(0,0,0,.18) 3px
+  );
+  z-index: 9998;
+  animation: crt-flicker 2.2s infinite;
+}
+@keyframes crt-flicker {
+  0%,100% { opacity: 1; }
+  48%     { opacity: 0.92; }
+  52%     { opacity: 1; }
+}

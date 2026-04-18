@@ -600,6 +600,13 @@
     const atts = store.state.pendingAttachments.slice();
     if (!body.trim() && !atts.length) return;
     sendTypingStop();
+    // Easter egg: /baa (or "baa baa baa") walks a sheep across the pane.
+    const trimmed = body.trim();
+    if (trimmed === '/baa' || /^(baa\s*){3,}$/i.test(trimmed)) {
+      if (typeof window.walkSheep === 'function') window.walkSheep();
+      ta.value = '';
+      return;
+    }
     const payload = { body };
     if (atts.length) payload.attachment_ids = atts.map(a => a.id);
     if (store.state.replyTo) payload.reply_to_id = store.state.replyTo.id;
