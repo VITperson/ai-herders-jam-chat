@@ -158,6 +158,60 @@ Run `docker compose logs --since 30s web | grep xmpp-check` to see the bridge ca
 - `/api/auth/xmpp-check` is a public endpoint — no rate limiting, no authentication. It's only safe because in this setup it's reachable only from the internal docker network (`180426_default`) and the host's `localhost:3000`. A production deployment would gate it behind a shared secret or mTLS.
 - User deletion in the chat-app doesn't proactively revoke active XMPP sessions — next login will fail, but an existing stream keeps working until it naturally reconnects. Fix would be to push a stanza-level `session:revoked` from the chat-app, analogous to what we already do for web sessions.
 
+## Phase 4 — cross-server MUC + load test
+
+Two extra scripts under `scripts/`, both demo-grade.
+
+### Cross-server MUC
+
+`xmpp-muc.js` has alice@chat1.local create `lobby@conference.chat1.local`, submit an instant-room config (empty XEP-0045 submit form — without it the room stays "locked" and rejects remote joins), then has carol@chat2.local join the room via s2s to `conference.chat1.local` and exchange a groupchat message.
+
+The key wiring detail is docker network aliases on the `chat_xmpp` bridge:
+
+```yaml
+xmpp1:
+  networks:
+    chat_xmpp:
+      aliases: [ chat1.local, conference.chat1.local ]
+xmpp2:
+  networks:
+    chat_xmpp:
+      aliases: [ chat2.local, conference.chat2.local ]
+```
+
+Without the `conference.*` alias, chat2's s2s-outgoing resolver can't find `conference.chat1.local` and the MUC never federates. Self-signed certs already cover the subdomain (`prosodyctl cert generate chat1.local` populates SAN with both).
+
+```bash
+cd scripts && node xmpp-muc.js
+# [ok] both online
+# [ok] alice unlocked (instant) room
+# [ok] both joined lobby@conference.chat1.local
+# [ok] alice sent groupchat ...
+# [ok] carol received groupchat: ...
+# [ok] cross-server MUC via s2s works
+```
+
+### Load test
+
+`xmpp-loadtest.js` spins up N "sender" clients on chat1 and N receivers on chat2 (auto-registered in the chat-app), fires M messages per sender through s2s, and reports delivery + one-way latency:
+
+```bash
+node xmpp-loadtest.js 20 25
+# [load] 40 clients online in 1879 ms
+# [load] sent 500 messages in 7 ms
+#
+# === results ===
+# pairs:              20
+# messages/sender:    25
+# delivered:          500 / 500
+# dropped:            0
+# one-way latency:    avg=529 ms, p50=536 ms, p95=613 ms, max=618 ms
+```
+
+Throughput is bounded by the prosody-through-QEMU emulation on Apple Silicon — on a native-arch host or with real HTTP-bridge tuning you'd expect ~10× better numbers.
+
+Defaults are modest (`10 pairs × 20 messages`); bump the args for bigger runs. Each sender/receiver is a real SASL login hitting the chat-app auth bridge, so there's no shortcut — this exercises the full stack.
+
 ## Relationship to the core chat app
 
 The core `docker-compose.yml` is still untouched. `src/modules/auth/routes.js` gained one additional route (`/xmpp-check`) behind no middleware; everything else in the app is unchanged. You can bring the XMPP federation up and down independently, and toggling XMPP off simply leaves that endpoint unused.

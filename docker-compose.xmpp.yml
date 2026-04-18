@@ -8,6 +8,7 @@ services:
       chat_xmpp:
         aliases:
           - chat1.local
+          - conference.chat1.local
       core_net: {}
     ports:
       - "5222:5222"
@@ -28,6 +29,7 @@ services:
       chat_xmpp:
         aliases:
           - chat2.local
+          - conference.chat2.local
       core_net: {}
     ports:
       - "5232:5222"
