@@ -1,0 +1,49 @@
+services:
+  xmpp1:
+    image: prosody/prosody:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    hostname: chat1.local
+    networks:
+      chat_xmpp:
+        aliases:
+          - chat1.local
+    ports:
+      - "5222:5222"
+      - "5269:5269"
+      - "5280:5280"
+    environment:
+      LOCAL: admin
+      DOMAIN: chat1.local
+      PASSWORD: admin01
+    volumes:
+      - ./xmpp/chat1/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - xmpp1_data:/var/lib/prosody
+
+  xmpp2:
+    image: prosody/prosody:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    hostname: chat2.local
+    networks:
+      chat_xmpp:
+        aliases:
+          - chat2.local
+    ports:
+      - "5232:5222"
+      - "5279:5269"
+      - "5281:5280"
+    environment:
+      LOCAL: admin
+      DOMAIN: chat2.local
+      PASSWORD: admin02
+    volumes:
+      - ./xmpp/chat2/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - xmpp2_data:/var/lib/prosody
+
+volumes:
+  xmpp1_data:
+  xmpp2_data:
+
+networks:
+  chat_xmpp:
