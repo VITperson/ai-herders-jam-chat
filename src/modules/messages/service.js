@@ -24,6 +24,18 @@ function attachmentDto(r) {
 }
 
 function messageRowToDto(row, attachments) {
+    const replyToId = row.reply_to_id ? String(row.reply_to_id) : null;
+    let replyToPreview = null;
+    let replyToAuthor = null;
+    if (replyToId) {
+        const deleted = !!row.reply_to_deleted_at;
+        replyToPreview = deleted
+            ? null
+            : String(row.reply_to_body || '').slice(0, 140);
+        replyToAuthor = row.reply_to_author_username
+            ? row.reply_to_author_username
+            : 'Deleted user';
+    }
     return {
         id: String(row.id),
         room_id: row.room_id,
@@ -31,7 +43,9 @@ function messageRowToDto(row, attachments) {
         author_username: row.author_id ? row.author_username : null,
         author_display: row.author_id ? row.author_username : 'Deleted user',
         body: row.deleted_at ? '' : row.body,
-        reply_to_id: row.reply_to_id ? String(row.reply_to_id) : null,
+        reply_to_id: replyToId,
+        reply_to_preview: replyToPreview,
+        reply_to_author_username: replyToAuthor,
         created_at: row.created_at,
         edited_at: row.edited_at,
         deleted_at: row.deleted_at,
@@ -83,15 +97,24 @@ async function createMessage(userId, roomId, { body, reply_to_id, attachment_ids
     try {
         await client.query('BEGIN');
 
+        let replyTargetInfo = null;
         if (reply_to_id != null) {
             const r = await client.query(
-                'SELECT id, room_id, deleted_at FROM messages WHERE id=$1',
+                `SELECT m.id, m.room_id, m.deleted_at, m.body,
+                        u.username AS author_username
+                 FROM messages m
+                 LEFT JOIN users u ON u.id = m.author_id
+                 WHERE m.id = $1`,
                 [reply_to_id]
             );
             if (!r.rows[0] || r.rows[0].room_id !== roomId || r.rows[0].deleted_at) {
                 await client.query('ROLLBACK');
                 throw httpError(400, 'bad_reply', 'reply target invalid');
             }
+            replyTargetInfo = {
+                body: r.rows[0].body,
+                author_username: r.rows[0].author_username,
+            };
         }
 
         const ins = await client.query(
@@ -122,7 +145,13 @@ async function createMessage(userId, roomId, { body, reply_to_id, attachment_ids
         await client.query('COMMIT');
 
         const dto = messageRowToDto(
-            { ...msg, author_username: u.rows[0] ? u.rows[0].username : null },
+            {
+                ...msg,
+                author_username: u.rows[0] ? u.rows[0].username : null,
+                reply_to_body: replyTargetInfo ? replyTargetInfo.body : null,
+                reply_to_deleted_at: null,
+                reply_to_author_username: replyTargetInfo ? replyTargetInfo.author_username : null,
+            },
             attachments
         );
         return dto;
@@ -153,9 +182,14 @@ async function listMessages(userId, roomId, { before, after, limit }) {
     const sql = `
         SELECT m.id, m.room_id, m.author_id, m.body, m.reply_to_id,
                m.created_at, m.edited_at, m.deleted_at,
-               u.username AS author_username
+               u.username AS author_username,
+               rm.body        AS reply_to_body,
+               rm.deleted_at  AS reply_to_deleted_at,
+               ru.username    AS reply_to_author_username
         FROM messages m
         LEFT JOIN users u ON u.id = m.author_id
+        LEFT JOIN messages rm ON rm.id = m.reply_to_id
+        LEFT JOIN users ru ON ru.id = rm.author_id
         WHERE ${where}
         ORDER BY m.id ${order}
         LIMIT $${params.length}`;

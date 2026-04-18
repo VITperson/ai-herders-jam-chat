@@ -841,3 +841,16 @@ input[type="radio"], input[type="checkbox"] {
 }
 .radio-group input:disabled + , 
 .radio-group label:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
+
+/* Reply-quote — clickable, jumps to target message */
+.msg .reply-quote { transition: background var(--t-fast); }
+.msg .reply-quote:hover { background: var(--bg-elev-2); color: var(--text); }
+
+/* Brief highlight on the target of a jump */
+.msg.msg-hl {
+  animation: msg-flash 1.6s cubic-bezier(.2,.6,.2,1);
+}
+@keyframes msg-flash {
+  0%   { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
+  100% { background: transparent; box-shadow: none; }
+}

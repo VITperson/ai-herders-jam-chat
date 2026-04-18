@@ -438,7 +438,13 @@
     const wrap = document.createElement('div');
     wrap.className = 'msg';
     wrap.dataset.id = m.id;
-    const reply = m.reply_to_id ? `<div class="reply-quote" data-ref="${esc(m.reply_to_id)}">↩ reply to #${esc(m.reply_to_id)}</div>` : '';
+    let reply = '';
+    if (m.reply_to_id) {
+      const author = m.reply_to_author_username || 'Deleted user';
+      const preview = m.reply_to_preview;
+      const text = preview ? (preview.length > 120 ? preview.slice(0, 120) + '…' : preview) : '[deleted]';
+      reply = `<div class="reply-quote" data-ref="${esc(m.reply_to_id)}" title="Click to jump to this message">↩ <b>${esc(author)}</b>: ${esc(text).replace(/\n/g, ' ')}</div>`;
+    }
     const edited = m.edited_at && !m.deleted_at ? ' <span class="edited">(edited)</span>' : '';
     const body = m.deleted_at
       ? '<div class="body deleted">[message deleted]</div>'
@@ -451,6 +457,10 @@
       ${attachments}
       <div class="actions"></div>
     `;
+    const quoteEl = wrap.querySelector('.reply-quote');
+    if (quoteEl && m.reply_to_id) {
+      quoteEl.addEventListener('click', () => scrollToMessage(m.reply_to_id));
+    }
     const actions = wrap.querySelector('.actions');
     if (!m.deleted_at) {
       const replyBtn = document.createElement('button'); replyBtn.textContent = 'Reply';
@@ -508,14 +518,32 @@
 
   async function loadOlder() {
     const roomId = store.state.activeRoomId;
-    if (!roomId) return;
+    if (!roomId) return false;
     const cursor = store.state.oldestCursor[roomId];
-    if (!cursor) return;
+    if (!cursor) return false;
     const box = $('messages');
     const prevHeight = box.scrollHeight;
     await loadMessages(roomId, cursor);
     renderMessages(roomId);
     box.scrollTop = box.scrollHeight - prevHeight;
+    return true;
+  }
+
+  // Scroll to a specific message by id. Loads older pages if needed.
+  async function scrollToMessage(id) {
+    const sel = `.msg[data-id="${String(id).replace(/["\\]/g, '\\$&')}"]`;
+    let el = document.querySelector(sel);
+    let tries = 0;
+    while (!el && tries < 10) {
+      const loaded = await loadOlder();
+      if (!loaded) break;
+      el = document.querySelector(sel);
+      tries++;
+    }
+    if (!el) { toast('Message not loaded — scroll up further.'); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('msg-hl');
+    setTimeout(() => el.classList.remove('msg-hl'), 1600);
   }
 
   // ---------- Sending ----------
@@ -524,7 +552,14 @@
     const pr = $('reply-preview');
     pr.classList.remove('hidden');
     pr.innerHTML = `<span>Replying to <b>${esc(m.author_display || m.author_username)}</b>: ${esc((m.body || '').slice(0, 80))}</span><button class="secondary" id="cancel-reply" style="padding:2px 8px;">×</button>`;
-    $('cancel-reply').onclick = () => { store.state.replyTo = null; pr.classList.add('hidden'); };
+    $('cancel-reply').onclick = () => { store.state.replyTo = null; pr.classList.add('hidden'); $('msg-input').focus(); };
+    const input = $('msg-input');
+    if (input) {
+      input.focus();
+      // Place caret at the end of whatever's already typed.
+      const v = input.value;
+      input.setSelectionRange(v.length, v.length);
+    }
   }
 
   function renderPendingAttachments() {
