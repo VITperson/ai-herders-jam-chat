@@ -14,6 +14,7 @@
     replyTo: null,      // {id, body, author}
     oldestCursor: {},   // roomId -> oldest loaded id (for infinite scroll)
     hasMore: {},        // roomId -> bool
+    latestSeenId: {},   // roomId -> highest message id seen (watermark for gap fill)
   };
   function emit(type, detail) {
     bus.dispatchEvent(new CustomEvent(type, { detail }));

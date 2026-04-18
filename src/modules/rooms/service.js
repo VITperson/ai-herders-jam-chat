@@ -299,6 +299,71 @@ async function unbanMember(actorId, roomId, targetId) {
     await query('DELETE FROM room_bans WHERE room_id=$1 AND user_id=$2', [roomId, targetId]);
 }
 
+async function listBanned(actorId, roomId) {
+    await assertAdmin(roomId, actorId);
+    const { rows } = await query(
+        `SELECT u.id, u.username, rb.banned_by, bu.username AS banned_by_username, rb.created_at
+         FROM room_bans rb
+         JOIN users u ON u.id = rb.user_id
+         LEFT JOIN users bu ON bu.id = rb.banned_by
+         WHERE rb.room_id=$1 AND u.deleted_at IS NULL
+         ORDER BY rb.created_at DESC`,
+        [roomId]
+    );
+    return rows;
+}
+
+async function inviteUserByUsername(actorId, roomId, username) {
+    await assertAdmin(roomId, actorId);
+    const room = await getRoom(roomId);
+    if (!room || room.deleted_at) throw httpError(404, 'room_not_found', 'room not found');
+    const u = await query('SELECT id FROM users WHERE username=$1 AND deleted_at IS NULL', [username]);
+    if (!u.rows[0]) throw httpError(404, 'user_not_found', 'user not found');
+    const targetId = u.rows[0].id;
+    if (await isBannedFromRoom(roomId, targetId)) {
+        throw httpError(409, 'user_banned', 'user is banned from this room; unban first');
+    }
+    await query(
+        "INSERT INTO room_members (room_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING",
+        [roomId, targetId]
+    );
+    return { userId: targetId, username };
+}
+
+async function updateRoom(actorId, roomId, { name, description, type }) {
+    const room = await getRoom(roomId);
+    if (!room || room.deleted_at) throw httpError(404, 'room_not_found', 'room not found');
+    const actorRole = await getMyRole(roomId, actorId);
+    if (!actorRole || (actorRole !== 'owner' && actorRole !== 'admin')) {
+        throw httpError(403, 'forbidden', 'admin+ required');
+    }
+    // Only owner can change name or visibility (type).
+    if ((name != null || type != null) && actorRole !== 'owner') {
+        throw httpError(403, 'forbidden', 'only owner can change name/visibility');
+    }
+    const sets = [];
+    const params = [];
+    if (name != null) { params.push(name); sets.push(`name=$${params.length}`); }
+    if (description != null) { params.push(description); sets.push(`description=$${params.length}`); }
+    if (type != null) {
+        if (type !== 'public' && type !== 'private') throw httpError(400, 'bad_request', 'invalid type');
+        params.push(type); sets.push(`type=$${params.length}`);
+    }
+    if (!sets.length) return getRoom(roomId);
+    params.push(roomId);
+    try {
+        const { rows } = await query(
+            `UPDATE rooms SET ${sets.join(', ')} WHERE id=$${params.length}
+             RETURNING id, name, type, description, owner_id, created_at`,
+            params
+        );
+        return rows[0];
+    } catch (err) {
+        if (err.code === '23505') throw httpError(409, 'room_name_taken', 'room name taken');
+        throw err;
+    }
+}
+
 async function makeAdmin(actorId, roomId, targetId) {
     const room = await getRoom(roomId);
     if (!room || room.deleted_at) throw httpError(404, 'room_not_found', 'room not found');
@@ -361,4 +426,7 @@ module.exports = {
     unmakeAdmin,
     getRoomMemberIds,
     isRoomMember,
+    listBanned,
+    inviteUserByUsername,
+    updateRoom,
 };

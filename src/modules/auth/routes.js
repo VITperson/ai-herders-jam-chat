@@ -60,6 +60,7 @@ const registerSchema = z.object({
 const loginSchema = z.object({
     login: z.string().min(1).max(255),
     password: z.string().min(1).max(200),
+    remember: z.boolean().optional(),
 });
 
 const resetRequestSchema = z.object({ email: z.string().email().max(255) });
@@ -82,6 +83,11 @@ router.post('/login', async (req, res, next) => {
     try {
         const body = parse(loginSchema, req.body);
         const user = await service.authenticate(body.login, body.password);
+        if (!body.remember) {
+            // Browser-session cookie: dies on browser close.
+            req.session.cookie.expires = false;
+            req.session.cookie.maxAge = null;
+        }
         await setLoggedIn(req, user.id);
         res.json({ user: { id: user.id, email: user.email, username: user.username, created_at: user.created_at } });
     } catch (e) { next(e); }

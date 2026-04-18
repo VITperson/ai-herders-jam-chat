@@ -180,6 +180,12 @@
     loadMembers(roomId);
   }
 
+  function bumpWatermark(roomId, id) {
+    if (id == null) return;
+    const cur = store.state.latestSeenId[roomId];
+    if (!cur || Number(id) > Number(cur)) store.state.latestSeenId[roomId] = String(id);
+  }
+
   async function loadMessages(roomId, before) {
     try {
       const q = before ? `?before=${encodeURIComponent(before)}&limit=50` : '?limit=50';
@@ -189,8 +195,41 @@
       store.state.messages[roomId] = list.concat(existing);
       store.state.oldestCursor[roomId] = r.nextCursor || (list[0] && list[0].id) || store.state.oldestCursor[roomId];
       store.state.hasMore[roomId] = !!r.nextCursor;
+      for (const m of list) bumpWatermark(roomId, m.id);
     } catch (e) {
       toast('Failed to load messages: ' + e.message, 'error');
+    }
+  }
+
+  async function fillGapForRoom(roomId) {
+    const after = store.state.latestSeenId[roomId];
+    if (!after) return;
+    try {
+      let cursor = after;
+      let safetyPages = 10; // up to 500 * 10 = 5000 missed; beyond that just reload page
+      while (safetyPages-- > 0) {
+        const r = await api.get(`/api/rooms/${roomId}/messages?after=${encodeURIComponent(cursor)}&limit=500`);
+        const list = r.messages || [];
+        if (!list.length) break;
+        const arr = store.state.messages[roomId] = store.state.messages[roomId] || [];
+        const known = new Set(arr.map(m => String(m.id)));
+        let appended = 0;
+        for (const m of list) {
+          if (known.has(String(m.id))) continue;
+          arr.push(m);
+          appended++;
+          bumpWatermark(roomId, m.id);
+          cursor = m.id;
+        }
+        if (appended && roomId === store.state.activeRoomId) renderMessages(roomId, { scrollToBottom: true });
+        else if (appended) {
+          store.state.unread[roomId] = (store.state.unread[roomId] || 0) + appended;
+          renderRoomLists();
+        }
+        if (!r.hasMore) break;
+      }
+    } catch (e) {
+      console.warn('gap fill failed for room', roomId, e);
     }
   }
 
@@ -384,6 +423,7 @@
       const rid = m.room_id;
       const arr = store.state.messages[rid] = store.state.messages[rid] || [];
       arr.push(m);
+      bumpWatermark(rid, m.id);
       if (rid === store.state.activeRoomId) appendMessage(m);
       else { store.state.unread[rid] = (store.state.unread[rid] || 0) + 1; renderRoomLists(); }
     });
@@ -421,6 +461,53 @@
       renderRoomLists();
       toast('Room was deleted');
     });
+    ws.on('room:kicked', (p) => {
+      const rid = p && p.roomId;
+      if (!rid) return;
+      // Wipe local state for this room so no messages/members remain visible.
+      delete store.state.messages[rid];
+      delete store.state.members[rid];
+      delete store.state.unread[rid];
+      delete store.state.latestSeenId[rid];
+      delete store.state.oldestCursor[rid];
+      delete store.state.hasMore[rid];
+      store.state.rooms = (store.state.rooms || []).filter(r => r.id !== rid);
+      if (store.state.activeRoomId === rid) {
+        store.setActiveRoom(null);
+        $('chat-title').textContent = 'Select a room';
+        $('chat-desc').textContent = '';
+        $('btn-manage-room').style.display = 'none';
+        $('btn-leave-room').style.display = 'none';
+        $('btn-invite-user').style.display = 'none';
+        $('input-wrap').style.display = 'none';
+        $('messages').innerHTML = '<div class="empty-state">You were removed from this room.</div>';
+        $('member-list').innerHTML = '';
+        closeModal();
+      }
+      renderRoomLists();
+      toast(p.reason === 'banned' ? 'You were banned from a room' : 'You were removed from a room', 'error');
+    });
+    // On WS reconnect, fill any message gaps that happened while disconnected.
+    let wsEverConnected = false;
+    const sock = ws.get();
+    if (sock) {
+      sock.on('connect', () => {
+        if (wsEverConnected) {
+          const rid = store.state.activeRoomId;
+          if (rid) {
+            // Re-subscribe to the active room and fetch missed messages.
+            ws.emit('room:subscribe', { roomId: rid });
+            fillGapForRoom(rid);
+          }
+          // Also top up watermarks for any room the user has messages cached for.
+          for (const other of Object.keys(store.state.latestSeenId)) {
+            if (other !== rid) fillGapForRoom(other);
+          }
+        }
+        wsEverConnected = true;
+      });
+    }
+
     ws.on('friend:request', () => { toast('New friend request'); reloadSidebar(); });
     ws.on('friend:accepted', () => { reloadSidebar(); });
     ws.on('friend:removed', () => { reloadSidebar(); });
@@ -447,8 +534,9 @@
   // ---------- Modals ----------
   function openModal(html) {
     const root = $('modal-root');
-    root.innerHTML = `<div class="modal-backdrop"><div class="modal">${html}</div></div>`;
+    root.innerHTML = `<div class="modal-backdrop"><div class="modal"><button class="modal-close" aria-label="Close" title="Close">×</button>${html}</div></div>`;
     root.querySelector('.modal-backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
+    root.querySelector('.modal-close').addEventListener('click', closeModal);
     return root.querySelector('.modal');
   }
   function closeModal() { $('modal-root').innerHTML = ''; }
@@ -553,101 +641,247 @@
     const room = (store.state.rooms || []).find(r => r.id === roomId);
     if (!room) return;
     const isOwner = room.role === 'owner';
-    const members = store.state.members[roomId] || [];
     const m = openModal(`
-      <h2>Manage "${esc(room.name)}"</h2>
+      <h2>Manage Room: <span id="mr-title">#${esc(room.name)}</span></h2>
       <div class="tabs">
         <button class="active" data-tab="members">Members</button>
-        <button data-tab="invites">Invites</button>
-        <button data-tab="danger">Danger</button>
+        <button data-tab="admins">Admins</button>
+        <button data-tab="banned">Banned users</button>
+        <button data-tab="invites">Invitations</button>
+        <button data-tab="settings">Settings</button>
       </div>
       <div id="mr-body"></div>
     `);
     const body = m.querySelector('#mr-body');
-    function renderTab(tab) {
-      m.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-      if (tab === 'members') {
-        body.innerHTML = '<div class="list" id="mr-members"></div>';
-        const box = body.querySelector('#mr-members');
-        const myId = store.state.me && store.state.me.id;
-        const myRole = room.role;
-        for (const mem of members) {
-          const uid = mem.user_id || mem.id;
-          const row = document.createElement('div');
-          row.className = 'row-item';
-          row.innerHTML = `<div><b>${esc(mem.username)}</b> <span class="role">${esc(mem.role)}</span></div>`;
-          const actions = document.createElement('div');
-          actions.className = 'actions';
-          actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
-          const canModerate = (myRole === 'owner' || myRole === 'admin') && uid !== myId && mem.role !== 'owner';
-          const canPromote = myRole === 'owner' && mem.role === 'member';
-          const canDemote = myRole === 'owner' && mem.role === 'admin';
-          async function call(endpoint, label) {
-            try {
-              await api.post(`/api/rooms/${roomId}/members/${uid}/${endpoint}`, {});
-              toast(`${label}: ok`);
-              await loadMembers(roomId);
-              renderTab('members');
-            } catch (e) { toast(e.message, 'error'); }
+    const myId = store.state.me && store.state.me.id;
+    const myRole = room.role;
+
+    async function callMember(uid, endpoint, label) {
+      try {
+        await api.post(`/api/rooms/${roomId}/members/${uid}/${endpoint}`, {});
+        toast(`${label}: ok`);
+        await loadMembers(roomId);
+        renderTab(currentTab);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    let currentTab = 'members';
+    let memberFilter = '';
+
+    function renderMembersTab() {
+      const members = store.state.members[roomId] || [];
+      const filtered = memberFilter
+        ? members.filter(mm => (mm.username || '').toLowerCase().includes(memberFilter.toLowerCase()))
+        : members;
+      body.innerHTML = `
+        <div class="row"><input id="mr-search" placeholder="Search member…" value="${esc(memberFilter)}"></div>
+        <div class="mr-table" id="mr-list"></div>
+      `;
+      body.querySelector('#mr-search').addEventListener('input', debounce((e) => {
+        memberFilter = e.target.value;
+        renderMembersTab();
+      }, 150));
+      const list = body.querySelector('#mr-list');
+      if (!filtered.length) { list.innerHTML = '<div class="empty-state">No members</div>'; return; }
+      const header = document.createElement('div'); header.className = 'mr-row mr-head';
+      header.innerHTML = `<div>Username</div><div>Status</div><div>Role</div><div>Actions</div>`;
+      list.appendChild(header);
+      for (const mem of filtered) {
+        const uid = mem.user_id || mem.id;
+        const pres = store.state.presence[uid] || 'offline';
+        const row = document.createElement('div'); row.className = 'mr-row';
+        row.innerHTML = `
+          <div><b>${esc(mem.username)}</b></div>
+          <div><span class="dot ${pres}"></span>${pres}</div>
+          <div>${esc(mem.role)}</div>
+          <div class="mr-actions"></div>`;
+        const actions = row.querySelector('.mr-actions');
+        const canModerate = (myRole === 'owner' || myRole === 'admin') && uid !== myId && mem.role !== 'owner';
+        if (mem.role === 'owner') {
+          actions.textContent = '—';
+        } else {
+          if (myRole === 'owner' && mem.role === 'admin') {
+            const rmAdmin = mkLink('[Remove admin]', () => callMember(uid, 'unadmin', 'Demoted'));
+            actions.appendChild(rmAdmin);
+          }
+          if (myRole === 'owner' && mem.role === 'member') {
+            actions.appendChild(mkLink('[Make admin]', () => callMember(uid, 'admin', 'Promoted')));
           }
           if (canModerate) {
-            const kick = document.createElement('button'); kick.textContent = 'Kick'; kick.className = 'secondary';
-            kick.onclick = () => call('kick', 'Kicked');
-            const ban = document.createElement('button'); ban.textContent = 'Ban'; ban.className = 'danger';
-            ban.onclick = () => call('ban', 'Banned');
-            const unban = document.createElement('button'); unban.textContent = 'Unban'; unban.className = 'secondary';
-            unban.onclick = () => call('unban', 'Unbanned');
-            actions.appendChild(kick); actions.appendChild(ban); actions.appendChild(unban);
+            actions.appendChild(mkLink('[Ban]', () => callMember(uid, 'ban', 'Banned')));
+            actions.appendChild(mkLink('[Remove from room]', () => callMember(uid, 'kick', 'Kicked')));
           }
-          if (canPromote) {
-            const p = document.createElement('button'); p.textContent = 'Make admin';
-            p.onclick = () => call('admin', 'Promoted');
-            actions.appendChild(p);
-          }
-          if (canDemote) {
-            const d = document.createElement('button'); d.textContent = 'Demote'; d.className = 'secondary';
-            d.onclick = () => call('unadmin', 'Demoted');
-            actions.appendChild(d);
-          }
-          row.appendChild(actions);
-          box.appendChild(row);
         }
-      } else if (tab === 'invites') {
-        body.innerHTML = `
-          <div class="row"><button id="gen-invite">Generate invite token</button></div>
-          <div id="invite-out" class="row" style="word-break:break-all;"></div>`;
-        body.querySelector('#gen-invite').onclick = async () => {
-          try {
-            const r = await api.post(`/api/rooms/${roomId}/invites`, {});
-            const tok = r.token || (r.invite && r.invite.token) || '';
-            const url = r.url || (location.origin + '/app.html?invite=' + encodeURIComponent(tok));
-            body.querySelector('#invite-out').innerHTML = `<label>Token:</label><input readonly value="${esc(tok)}"><label>URL:</label><input readonly value="${esc(url)}">`;
-          } catch (e) { body.querySelector('#invite-out').textContent = e.message; }
-        };
-      } else if (tab === 'danger') {
-        body.innerHTML = `
-          <div class="row"><button class="danger" id="del-room" ${isOwner ? '' : 'disabled'}>Delete room</button></div>
-          <div id="del-err" class="error"></div>
-          ${isOwner ? '' : '<div class="empty-state">Only owner can delete.</div>'}
-        `;
-        const btn = body.querySelector('#del-room');
-        if (btn) btn.onclick = async () => {
-          if (!confirm('Delete this room? This cannot be undone.')) return;
-          try {
-            await api.del(`/api/rooms/${roomId}`);
-            store.state.rooms = store.state.rooms.filter(r => r.id !== roomId);
-            store.setActiveRoom(null);
-            renderRoomLists();
-            closeModal();
-            $('chat-title').textContent = 'Select a room';
-            $('messages').innerHTML = '';
-            $('input-wrap').style.display = 'none';
-          } catch (e) { body.querySelector('#del-err').textContent = e.message; }
-        };
+        list.appendChild(row);
       }
     }
+
+    function renderAdminsTab() {
+      const members = store.state.members[roomId] || [];
+      const owner = members.find(x => x.role === 'owner');
+      const admins = members.filter(x => x.role === 'admin');
+      body.innerHTML = `<div class="mr-card" id="mr-admins"></div>`;
+      const box = body.querySelector('#mr-admins');
+      const current = [owner, ...admins].filter(Boolean).map(a => a.username).join(', ') || '—';
+      box.insertAdjacentHTML('beforeend', `<p><b>Current admins:</b> ${esc(current)}</p>`);
+      if (owner) {
+        box.insertAdjacentHTML('beforeend',
+          `<p><b>${esc(owner.username)}</b> == owner (cannot lose admin rights)</p>`);
+      }
+      for (const a of admins) {
+        const uid = a.user_id || a.id;
+        const row = document.createElement('p');
+        row.innerHTML = `<b>${esc(a.username)}</b> `;
+        if (myRole === 'owner') {
+          row.appendChild(mkLink('[Remove admin]', () => callMember(uid, 'unadmin', 'Demoted')));
+        }
+        box.appendChild(row);
+      }
+      if (!admins.length) box.insertAdjacentHTML('beforeend', '<p class="empty-state">No admins yet.</p>');
+    }
+
+    async function renderBannedTab() {
+      body.innerHTML = `<div class="mr-table" id="mr-banned">Loading…</div>`;
+      try {
+        const r = await api.get(`/api/rooms/${roomId}/banned`);
+        const list = r.banned || [];
+        const box = body.querySelector('#mr-banned');
+        box.innerHTML = '';
+        const header = document.createElement('div'); header.className = 'mr-row mr-head';
+        header.innerHTML = `<div>Username</div><div>Banned by</div><div>Date/time</div><div>Actions</div>`;
+        box.appendChild(header);
+        for (const b of list) {
+          const row = document.createElement('div'); row.className = 'mr-row';
+          row.innerHTML = `
+            <div>${esc(b.username)}</div>
+            <div>${esc(b.banned_by_username || '—')}</div>
+            <div>${fmtTime(b.created_at)}</div>
+            <div class="mr-actions"></div>`;
+          row.querySelector('.mr-actions').appendChild(mkLink('[Unban]', async () => {
+            try {
+              await api.post(`/api/rooms/${roomId}/members/${b.id}/unban`, {});
+              toast('Unbanned');
+              renderBannedTab();
+            } catch (e) { toast(e.message, 'error'); }
+          }));
+          box.appendChild(row);
+        }
+        if (!list.length) box.innerHTML += '<div class="empty-state">No banned users</div>';
+      } catch (e) {
+        body.querySelector('#mr-banned').innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    function renderInvitesTab() {
+      body.innerHTML = `
+        <div class="mr-card">
+          <h3 style="margin-top:0;">Invite by username</h3>
+          <div class="row" style="display:flex;gap:8px;align-items:center;">
+            <input id="iv-uname" placeholder="username" style="flex:1;">
+            <button id="iv-send">Send invite</button>
+          </div>
+          <div id="iv-msg" style="margin-top:8px;font-size:12px;"></div>
+        </div>
+        <div class="mr-card" style="margin-top:12px;">
+          <h3 style="margin-top:0;">Invite link</h3>
+          <button id="iv-gen">Generate invite link</button>
+          <div id="iv-link" style="margin-top:8px;word-break:break-all;"></div>
+        </div>`;
+      body.querySelector('#iv-send').onclick = async () => {
+        const username = body.querySelector('#iv-uname').value.trim();
+        const msg = body.querySelector('#iv-msg');
+        if (!username) { msg.textContent = 'Enter username'; msg.className = 'error'; return; }
+        try {
+          await api.post(`/api/rooms/${roomId}/invite-user`, { username });
+          msg.textContent = `Invited ${username}`; msg.className = 'ok';
+          body.querySelector('#iv-uname').value = '';
+          await loadMembers(roomId);
+        } catch (e) { msg.textContent = e.message; msg.className = 'error'; }
+      };
+      body.querySelector('#iv-gen').onclick = async () => {
+        try {
+          const r = await api.post(`/api/rooms/${roomId}/invites`, {});
+          const tok = r.token || '';
+          const url = r.url || (location.origin + '/app.html?invite=' + encodeURIComponent(tok));
+          body.querySelector('#iv-link').innerHTML =
+            `<label>Token:</label><input readonly value="${esc(tok)}"><label>URL:</label><input readonly value="${esc(url)}">`;
+        } catch (e) { body.querySelector('#iv-link').textContent = e.message; }
+      };
+    }
+
+    function renderSettingsTab() {
+      body.innerHTML = `
+        <div class="mr-card">
+          <div class="row"><label>Room name</label><input id="st-name" value="${esc(room.name)}" ${isOwner ? '' : 'disabled'}></div>
+          <div class="row"><label>Description</label><input id="st-desc" value="${esc(room.description || '')}"></div>
+          <div class="row"><label>Visibility</label>
+            <label><input type="radio" name="st-type" value="public" ${room.type === 'public' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Public</label>
+            <label style="margin-left:12px;"><input type="radio" name="st-type" value="private" ${room.type === 'private' ? 'checked' : ''} ${isOwner ? '' : 'disabled'}> Private</label>
+          </div>
+          <div id="st-msg" style="font-size:12px;"></div>
+          <div class="actions" style="margin-top:10px;display:flex;justify-content:space-between;">
+            <button id="st-save">Save changes</button>
+            ${isOwner ? '<button class="danger" id="st-delete">Delete room</button>' : ''}
+          </div>
+          ${isOwner ? '' : '<p class="empty-state" style="margin-top:8px;">Only owner can change name/visibility or delete the room.</p>'}
+        </div>`;
+      body.querySelector('#st-save').onclick = async () => {
+        const payload = {};
+        const newName = body.querySelector('#st-name').value.trim();
+        const newDesc = body.querySelector('#st-desc').value.trim();
+        const newType = body.querySelector('input[name="st-type"]:checked').value;
+        if (isOwner && newName !== room.name) payload.name = newName;
+        if (newDesc !== (room.description || '')) payload.description = newDesc;
+        if (isOwner && newType !== room.type) payload.type = newType;
+        if (!Object.keys(payload).length) { body.querySelector('#st-msg').textContent = 'No changes'; return; }
+        try {
+          const r = await api.patch(`/api/rooms/${roomId}`, payload);
+          Object.assign(room, r.room || {});
+          const idx = (store.state.rooms || []).findIndex(x => x.id === roomId);
+          if (idx >= 0) Object.assign(store.state.rooms[idx], r.room || {});
+          $('chat-title').textContent = room.name;
+          $('chat-desc').textContent = room.description || '';
+          $('mr-title').textContent = '#' + room.name;
+          renderRoomLists();
+          const msg = body.querySelector('#st-msg'); msg.textContent = 'Saved'; msg.className = 'ok';
+        } catch (e) { const msg = body.querySelector('#st-msg'); msg.textContent = e.message; msg.className = 'error'; }
+      };
+      const del = body.querySelector('#st-delete');
+      if (del) del.onclick = async () => {
+        if (!confirm('Delete this room? This cannot be undone.')) return;
+        try {
+          await api.del(`/api/rooms/${roomId}`);
+          store.state.rooms = store.state.rooms.filter(r => r.id !== roomId);
+          store.setActiveRoom(null);
+          renderRoomLists();
+          closeModal();
+          $('chat-title').textContent = 'Select a room';
+          $('messages').innerHTML = '';
+          $('input-wrap').style.display = 'none';
+        } catch (e) { const msg = body.querySelector('#st-msg'); msg.textContent = e.message; msg.className = 'error'; }
+      };
+    }
+
+    function renderTab(tab) {
+      currentTab = tab;
+      m.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      if (tab === 'members') renderMembersTab();
+      else if (tab === 'admins') renderAdminsTab();
+      else if (tab === 'banned') renderBannedTab();
+      else if (tab === 'invites') renderInvitesTab();
+      else if (tab === 'settings') renderSettingsTab();
+    }
     m.querySelectorAll('.tabs button').forEach(b => b.onclick = () => renderTab(b.dataset.tab));
-    renderTab('members');
+    // Ensure fresh members list
+    loadMembers(roomId).then(() => renderTab('members'));
+  }
+
+  function mkLink(text, onClick) {
+    const a = document.createElement('a');
+    a.href = '#'; a.textContent = text;
+    a.style.cssText = 'margin-right:8px;color:var(--accent);';
+    a.onclick = (e) => { e.preventDefault(); onClick(); };
+    return a;
   }
 
   async function openSessionsModal() {
@@ -816,7 +1050,7 @@
     pm.onclick = (e) => e.stopPropagation();
     $('menu-change-pw').onclick = () => { pm.classList.add('hidden'); openChangePasswordModal(); };
     $('menu-delete-acc').onclick = () => { pm.classList.add('hidden'); openDeleteAccountModal(); };
-    $('menu-logout').onclick = async () => { try { await api.post('/api/auth/logout'); } catch (_) {} location.href = '/'; };
+    $('btn-signout').onclick = async () => { try { await api.post('/api/auth/logout'); } catch (_) {} location.href = '/'; };
 
     // Home (logo) — clear active room, show welcome
     $('logo-home').onclick = () => {

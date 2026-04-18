@@ -108,9 +108,22 @@ function broadcastToUser(userId, event, payload) {
     for (const sid of set) ioRef.to(sid).emit(event, payload);
 }
 
+// Force all of a user's sockets to leave a specific room channel.
+function evictUserFromRoom(userId, roomId) {
+    if (!ioRef) return;
+    const set = userSockets.get(userId);
+    if (!set) return;
+    const channel = `room:${roomId}`;
+    for (const sid of set) {
+        const sock = ioRef.sockets.sockets.get(sid);
+        if (sock) sock.leave(channel);
+    }
+}
+
 module.exports = {
     attachIO,
     getIO,
     broadcastToRoom,
     broadcastToUser,
+    evictUserFromRoom,
 };

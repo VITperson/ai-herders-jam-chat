@@ -108,6 +108,39 @@ router.post('/:id/invites', async (req, res, next) => {
     } catch (e) { next(e); }
 });
 
+router.get('/:id/banned', async (req, res, next) => {
+    try {
+        const id = parseRoomId(req.params.id);
+        const banned = await service.listBanned(req.session.userId, id);
+        res.json({ banned });
+    } catch (e) { next(e); }
+});
+
+const inviteUserSchema = z.object({ username: z.string().min(1).max(64) });
+router.post('/:id/invite-user', validate(inviteUserSchema), async (req, res, next) => {
+    try {
+        const id = parseRoomId(req.params.id);
+        const r = await service.inviteUserByUsername(req.session.userId, id, req.body.username);
+        hub.broadcastToRoom(id, 'room:member-joined', { roomId: id, userId: r.userId });
+        hub.broadcastToUser(r.userId, 'room:invited', { roomId: id });
+        res.status(201).json({ ok: true, userId: r.userId });
+    } catch (e) { next(e); }
+});
+
+const patchRoomSchema = z.object({
+    name: z.string().min(3).max(50).optional(),
+    description: z.string().max(500).optional(),
+    type: z.enum(['public', 'private']).optional(),
+});
+router.patch('/:id', validate(patchRoomSchema), async (req, res, next) => {
+    try {
+        const id = parseRoomId(req.params.id);
+        const room = await service.updateRoom(req.session.userId, id, req.body);
+        hub.broadcastToRoom(id, 'room:updated', { roomId: id, room });
+        res.json({ room });
+    } catch (e) { next(e); }
+});
+
 router.get('/:id/members', async (req, res, next) => {
     try {
         const id = parseRoomId(req.params.id);

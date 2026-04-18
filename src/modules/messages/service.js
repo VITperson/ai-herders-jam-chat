@@ -134,16 +134,21 @@ async function createMessage(userId, roomId, { body, reply_to_id, attachment_ids
     }
 }
 
-async function listMessages(userId, roomId, { before, limit }) {
+async function listMessages(userId, roomId, { before, after, limit }) {
     const isMember = await roomsService.isRoomMember(roomId, userId);
     if (!isMember) throw httpError(403, 'forbidden', 'not a member');
-    const lim = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const hasAfter = after != null && after !== '';
+    const lim = Math.min(Math.max(Number(limit) || 50, 1), hasAfter ? 500 : 100);
     const params = [roomId];
     let where = 'm.room_id=$1 AND m.deleted_at IS NULL';
-    if (before != null && before !== '') {
+    if (hasAfter) {
+        params.push(after);
+        where += ` AND m.id > $${params.length}`;
+    } else if (before != null && before !== '') {
         params.push(before);
         where += ` AND m.id < $${params.length}`;
     }
+    const order = hasAfter ? 'ASC' : 'DESC';
     params.push(lim);
     const sql = `
         SELECT m.id, m.room_id, m.author_id, m.body, m.reply_to_id,
@@ -152,12 +157,16 @@ async function listMessages(userId, roomId, { before, limit }) {
         FROM messages m
         LEFT JOIN users u ON u.id = m.author_id
         WHERE ${where}
-        ORDER BY m.id DESC
+        ORDER BY m.id ${order}
         LIMIT $${params.length}`;
     const { rows } = await query(sql, params);
     const ids = rows.map(r => r.id);
     const attMap = await getAttachmentsForMessages(ids);
     const messages = rows.map(r => messageRowToDto(r, attMap.get(String(r.id)) || []));
+    if (hasAfter) {
+        const hasMore = rows.length === lim;
+        return { messages, hasMore };
+    }
     const nextCursor = rows.length === lim ? String(rows[rows.length - 1].id) : null;
     return { messages, nextCursor };
 }
@@ -173,6 +182,9 @@ async function editMessage(userId, messageId, { body }) {
     if (!msg || msg.deleted_at) throw httpError(404, 'message_not_found', 'message not found');
     if (!msg.author_id) throw httpError(403, 'forbidden', 'author deleted');
     if (msg.author_id !== userId) throw httpError(403, 'forbidden', 'not author');
+    if (!(await roomsService.isRoomMember(msg.room_id, userId))) {
+        throw httpError(403, 'forbidden', 'not a member');
+    }
     const { rows } = await query(
         `UPDATE messages SET body=$1, edited_at=now()
          WHERE id=$2 RETURNING id, room_id, body, edited_at`,
@@ -185,12 +197,11 @@ async function editMessage(userId, messageId, { body }) {
 async function deleteMessage(userId, messageId) {
     const msg = await getMessageById(messageId);
     if (!msg || msg.deleted_at) throw httpError(404, 'message_not_found', 'message not found');
-    let allowed = msg.author_id === userId;
-    if (!allowed) {
-        const role = await roomsService.getMyRole(msg.room_id, userId);
-        if (role === 'owner' || role === 'admin') allowed = true;
-    }
-    if (!allowed) throw httpError(403, 'forbidden', 'not allowed');
+    const role = await roomsService.getMyRole(msg.room_id, userId);
+    if (!role) throw httpError(403, 'forbidden', 'not a member');
+    const isAuthor = msg.author_id === userId;
+    const isMod = role === 'owner' || role === 'admin';
+    if (!isAuthor && !isMod) throw httpError(403, 'forbidden', 'not allowed');
     await query('UPDATE messages SET deleted_at=now() WHERE id=$1', [messageId]);
     return { id: String(msg.id), room_id: msg.room_id };
 }

@@ -64,8 +64,9 @@ router.get('/rooms/:id/messages', async (req, res, next) => {
         const roomId = parseUuid(req.params.id, 'room id');
         const userId = req.session.userId;
         const before = typeof req.query.before === 'string' ? req.query.before : undefined;
+        const after = typeof req.query.after === 'string' ? req.query.after : undefined;
         const limit = Number(req.query.limit) || 50;
-        const result = await service.listMessages(userId, roomId, { before, limit });
+        const result = await service.listMessages(userId, roomId, { before, after, limit });
         res.json(result);
     } catch (e) { next(e); }
 });
@@ -76,7 +77,7 @@ router.patch('/messages/:id', validate(editSchema), async (req, res, next) => {
         const messageId = parseBigInt(req.params.id, 'message id');
         const userId = req.session.userId;
         const r = await service.editMessage(userId, messageId, req.body);
-        wsRooms.emitMessageEdit(r.room_id, { id: r.id, body: r.body, edited_at: r.edited_at });
+        wsRooms.emitMessageEdit(r.room_id, { id: r.id, room_id: r.room_id, body: r.body, edited_at: r.edited_at });
         res.json({ ok: true, id: r.id, edited_at: r.edited_at });
     } catch (e) { next(e); }
 });
@@ -86,7 +87,7 @@ router.delete('/messages/:id', async (req, res, next) => {
         const messageId = parseBigInt(req.params.id, 'message id');
         const userId = req.session.userId;
         const r = await service.deleteMessage(userId, messageId);
-        wsRooms.emitMessageDelete(r.room_id, { id: r.id });
+        wsRooms.emitMessageDelete(r.room_id, { id: r.id, room_id: r.room_id });
         res.json({ ok: true, id: r.id });
     } catch (e) { next(e); }
 });
