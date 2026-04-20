@@ -119,14 +119,93 @@ docker compose down -v
 
 ## Tests
 
+Tests run on the host (not inside a container) against a **live** stack
+over `localhost:3000` / `localhost:5222` / `localhost:5232`, so the right
+services must be up first. All commands below are run from the repo root
+(`/…/18.04.26`), **not** from `scripts/` — `scripts/` has its own
+`package.json` without these npm scripts, which is why
+`npm run test:xmpp` errors with `Missing script` if you run it there.
+
+### Prerequisites
+
+- Node.js ≥ 20 on the host (the test runner uses built-in `node:test` +
+  native `fetch`, so no extra tooling beyond `npm install`).
+- Docker Desktop running.
+- `cp .env.example .env` done once.
+- `npm install` done once in the repo root (installs `socket.io-client`
+  and `@xmpp/client` used by the suites).
+
+### 1. Core integration suite — `npm test`
+
+Covers auth, rooms, messages, WS, and the `xmpp-check` HTTP bridge
+endpoint (~35 tests, ~8 s). Needs the main stack (web + Postgres) up:
+
 ```bash
-npm install
-npm test         # 35 integration tests (~8 s) — requires `docker compose up -d`
-npm run test:xmpp # optional: XMPP smoke + cross-server MUC (needs docker-compose.xmpp.yml up)
+docker compose up -d --build          # web on :3000, postgres internal
+curl -fsS http://localhost:3000/health # should print {"status":"ok","db":true}
+npm test
 ```
 
-Runs against the real web + Postgres stack via native `fetch` + `socket.io-client`
-+ the built-in `node:test` runner. See `test/` for the suite.
+Notes:
+
+- The suite talks to `http://localhost:3000` over real HTTP/WS — if
+  `:3000` is already taken by something else, `docker compose up` will
+  fail and so will the tests.
+- Tests create and delete their own users/rooms; they do **not** wipe
+  the database. If you want a clean slate: `docker compose down -v`
+  then `docker compose up -d --build` again.
+- To run a single file: `node --test test/rooms.test.js`.
+
+### 2. XMPP federation suite — `npm run test:xmpp`
+
+Runs `scripts/xmpp-smoke.js` (alice@chat1.local → carol@chat2.local via
+s2s) and `scripts/xmpp-muc.js` (cross-server MUC). Needs the **separate**
+XMPP compose file and seeded accounts:
+
+```bash
+docker compose -f docker-compose.xmpp.yml up -d   # prosody1 :5222, prosody2 :5232
+./xmpp/seed.sh                                    # create alice/bob/carol/dave + register rooms
+npm run test:xmpp
+```
+
+Gotchas:
+
+- Running `npm run test:xmpp` without the XMPP stack up fails with
+  `alice error: AggregateError` — that is the `@xmpp/client` TCP
+  connect error against a missing `localhost:5222`. Bring the stack
+  up and retry.
+- The Prosody servers delegate auth to the web app via
+  `mod_auth_http_bridge` → `POST /api/auth/xmpp-check`, so the **main**
+  `docker compose up -d` must also be running (otherwise logins fail
+  with `not-authorized`).
+- Self-signed certs are expected — both scripts set
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` intentionally.
+- Optional load test (not part of `npm run test:xmpp`):
+  `node scripts/xmpp-loadtest.js` — prints p50/p95/max latency.
+
+### Full green run from scratch
+
+```bash
+docker compose down -v
+docker compose -f docker-compose.xmpp.yml down -v
+docker compose up -d --build
+docker compose -f docker-compose.xmpp.yml up -d
+./xmpp/seed.sh
+npm install          # first time only
+npm test
+npm run test:xmpp
+```
+
+### Troubleshooting
+
+- `Missing script: "test:xmpp"` → you are in `scripts/`. `cd ..` to the
+  repo root.
+- `ECONNREFUSED 127.0.0.1:3000` in `npm test` → web container not up or
+  still booting; wait for `/health` to return 200.
+- `alice error: AggregateError` in `npm run test:xmpp` → XMPP stack not
+  up (see section 2).
+- `not-authorized` during XMPP login → main web stack is down, so the
+  Prosody auth bridge has nobody to ask.
 
 ## Federation (advanced)
 
